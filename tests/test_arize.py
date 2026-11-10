@@ -19,9 +19,13 @@ class ScriptedModel:
         self.replies = list(replies)
         self.calls = []
 
-    def chat(self, messages, tools):
+    def chat(self, messages, tools, on_token=None):
         self.calls.append((messages, tools))
-        return self.replies.pop(0)
+        reply = self.replies.pop(0)
+        if on_token and reply.content:
+            for i in range(0, len(reply.content), 3):  # stream in small pieces
+                on_token(reply.content[i : i + 3])
+        return reply
 
 
 def call(name, **args):
@@ -238,3 +242,160 @@ def test_cli_memory_commands(tmp_path, monkeypatch, capsys):
     cli.main(["memory", "forget", "1"])
     cli.main(["memory", "list"])
     assert "doesn't remember anything" in capsys.readouterr().out
+
+
+# --- streaming, thinking, and the app server -------------------------------
+
+
+def test_stream_parsing_assembles_text_and_tool_calls():
+    from arize_assistant.llm import _read_stream
+
+    def sse(delta):
+        return "data: " + json.dumps({"choices": [{"delta": delta}]})
+
+    lines = [
+        sse({"content": "Hel"}),
+        sse({"content": "lo"}),
+        sse(
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "t1", "function": {"name": "web_", "arguments": ""}}
+                ]
+            }
+        ),
+        sse(
+            {"tool_calls": [{"index": 0, "function": {"name": "search", "arguments": '{"query":'}}]}
+        ),
+        sse({"tool_calls": [{"index": 0, "function": {"arguments": ' "cats"}'}}]}),
+        "",
+        "data: [DONE]",
+    ]
+    seen = []
+    reply = _read_stream(iter(lines), seen.append)
+    assert seen == ["Hel", "lo"] and reply.content == "Hello"
+    assert reply.tool_calls[0].name == "web_search"
+    assert json.loads(reply.tool_calls[0].arguments) == {"query": "cats"}
+
+
+def test_think_filter_hides_thinking_even_when_split():
+    from arize_assistant.agent import ThinkFilter
+
+    out = []
+    f = ThinkFilter(out.append)
+    for piece in ["<thi", "nk>secret ", "plans</th", "ink>\n\nHi ", "there <", "b>"]:
+        f(piece)
+    assert "".join(out) == "Hi there <b>"
+
+
+def test_no_think_switch(make_ctx, memory):
+    model = ScriptedModel([Reply("a"), Reply("b")])
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    agent.ask("hi")
+    assert model.calls[-1][0][0]["content"].endswith("/no_think")
+    agent.think = True
+    agent.ask("hi")
+    assert "/no_think" not in model.calls[-1][0][0]["content"]
+
+
+def test_agent_streams_answer(make_ctx, memory):
+    model = ScriptedModel([Reply("<think>hmm</think>Streaming works.")])
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    pieces = []
+    assert agent.ask("go", on_token=pieces.append) == "Streaming works."
+    assert "".join(pieces) == "Streaming works."
+
+
+@pytest.fixture
+def app_server(tmp_path, monkeypatch):
+    import threading
+
+    from arize_assistant.server import ArizeApp, make_server
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARIZE_WORKSPACE", str(tmp_path))
+    model = ScriptedModel([])
+    app = ArizeApp(Config.load(), model=model)
+    server = make_server(app, 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    client = httpx.Client(base_url=base, headers={"X-Arize-Token": app.token}, timeout=10)
+    yield app, model, client, base
+    server.shutdown()
+
+
+def test_server_page_and_security(app_server):
+    app, _, client, base = app_server
+    page = client.get("/")
+    assert page.status_code == 200 and app.token in page.text
+    assert client.get("/icon.png").headers["content-type"] == "image/png"
+    assert client.get("/api/info").json()["model"]
+    # No token, wrong token, or a foreign Host header are all refused.
+    assert httpx.get(base + "/api/memories").status_code == 403
+    assert (
+        httpx.post(
+            base + "/api/chat", json={"message": "hi"}, headers={"X-Arize-Token": "nope"}
+        ).status_code
+        == 403
+    )
+    assert client.get("/", headers={"Host": "evil.example:80"}).status_code == 403
+
+
+def test_server_chat_with_permission_prompt(app_server, tmp_path):
+    app, model, client, _ = app_server
+    model.replies += [
+        Reply("", [call("write_file", path="hello.txt", content="hi")]),
+        Reply("Saved it."),
+    ]
+    events = []
+    with client.stream("POST", "/api/chat", json={"message": "save a file"}) as resp:
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            ev = json.loads(line)
+            events.append(ev)
+            if ev["type"] == "confirm":
+                assert "hello.txt" in ev["text"]
+                r = client.post("/api/confirm", json={"id": ev["id"], "allow": True})
+                assert r.json()["ok"]
+    types = [e["type"] for e in events]
+    assert types[:3] == ["tool", "confirm", "result"] and types[-1] == "done"
+    assert events[-1]["text"] == "Saved it."
+    assert "".join(e["text"] for e in events if e["type"] == "token") == "Saved it."
+    assert (tmp_path / "hello.txt").read_text() == "hi"
+
+
+def test_server_memories_and_new_chat(app_server):
+    app, _, client, _ = app_server
+    m = app.memory.add("Likes chess.")
+    assert client.get("/api/memories").json()[0]["text"] == "Likes chess."
+    assert client.post("/api/memories/delete", json={"id": m.id}).json()["ok"]
+    assert client.get("/api/memories").json() == []
+    app.agent.history.append({"role": "user", "content": "x"})
+    assert client.post("/api/new").json()["ok"] and app.agent.history == []
+
+
+def test_server_reports_model_errors(app_server):
+    from arize_assistant.llm import LLMError
+
+    app, model, client, _ = app_server
+
+    def boom(*a, **k):
+        raise LLMError("Can't reach the model server")
+
+    model.chat = boom
+    lines = [
+        json.loads(x) for x in client.post("/api/chat", json={"message": "hi"}).text.splitlines()
+    ]
+    assert lines[-1] == {"type": "error", "text": "Can't reach the model server"}
+    assert app.agent.history == []
+
+
+def test_linux_shortcut(tmp_path, monkeypatch):
+    from arize_assistant import desktop
+
+    monkeypatch.setattr(desktop.Path, "home", lambda: tmp_path)
+    (tmp_path / "Desktop").mkdir()
+    made = desktop._linux_shortcuts()
+    assert len(made) == 2
+    text = (tmp_path / "Desktop" / "arize.desktop").read_text()
+    assert "-m arize_assistant app" in text and "arize.png" in text

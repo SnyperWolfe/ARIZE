@@ -36,6 +36,9 @@ confirm_actions = true
 
 # Folder ARIZE may read and write files in ("~" = your home folder).
 workspace = "~"
+
+# Let models like qwen3 "think" before answering: smarter but much slower.
+think = false
 """
 
 
@@ -51,6 +54,7 @@ class Config:
     max_steps: int = 8
     confirm_actions: bool = True
     workspace: str = "~"
+    think: bool = False
     timeout: float = 300.0
     home: Path = field(default_factory=home_dir)
 

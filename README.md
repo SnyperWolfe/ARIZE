@@ -36,6 +36,31 @@ ARIZE › In May Lisbon is usually around 17–23 °C and mostly dry...
    arize
    ```
 
+## Desktop app
+
+ARIZE also comes as a desktop app: a dark window with a glowing core that reacts while
+ARIZE listens, thinks, uses tools and speaks.
+
+```bash
+arize shortcut
+```
+
+This puts an **ARIZE** icon on your desktop (and in the Start menu on Windows).
+Double-click it to open ARIZE. You can also start it with `arize app`.
+
+- **Talk to it:** click the microphone, speak, and it sends when you stop. Voice input
+  uses your browser's speech recognition (Edge or Chrome), which may send audio to
+  Microsoft or Google to turn it into text.
+- **Hear it:** click **Voice off** to switch it to **Voice on** and ARIZE reads its
+  answers out loud using your computer's built-in voices.
+- **Memories:** see and delete what ARIZE remembers.
+- When ARIZE wants to write a file or run a command, an **Allow / Deny** box appears.
+
+The window is served from your own computer (`127.0.0.1`) and only that window can use
+it. ARIZE shuts down on its own about a minute after you close the window.
+
+![ARIZE desktop app](docs/screenshot.png)
+
 ## Using it
 
 | Command | What it does |
@@ -46,8 +71,23 @@ ARIZE › In May Lisbon is usually around 17–23 °C and mostly dry...
 | `arize memory add "I'm vegetarian"` | Teach it something directly. |
 | `arize memory forget 3` | Delete memory #3. `arize memory clear` deletes all. |
 | `arize tools` | List the tools ARIZE can use. |
+| `arize app` | Open the desktop app window. |
+| `arize shortcut` | Create the desktop icon. |
 | `arize --model llama3.1` | Use a different model for this run. |
 | `arize init` | Create the settings file. |
+
+## Making it faster
+
+How fast ARIZE answers depends on the model and your computer:
+
+- **Pick a smaller model.** `qwen3:4b` is about twice as fast as `qwen3:8b` and still
+  uses tools well: run `ollama pull qwen3:4b`, then set `model = "qwen3:4b"` in your
+  settings file. On older computers try `llama3.2:3b`.
+- **Leave `think = false`** (the default). Turning it on makes qwen3 write a long hidden
+  "thinking" section before every answer: sometimes smarter, much slower.
+- **A graphics card helps a lot.** Ollama uses an NVIDIA or AMD graphics card, or Apple
+  Silicon, automatically. Run `ollama ps` while ARIZE is answering: `100% GPU` is fast,
+  `100% CPU` is slow.
 
 ## Tools
 
@@ -82,6 +122,7 @@ api_key = ""                              # only for hosted services
 max_steps = 8                             # tool steps allowed per message
 confirm_actions = true                    # ask before writing files / running commands
 workspace = "~"                           # folder ARIZE may read and write in
+think = false                             # let qwen3 "think" first: smarter, much slower
 ```
 
 Every setting can also be set with an environment variable, e.g. `ARIZE_MODEL=llama3.1`.
@@ -101,6 +142,8 @@ ruff check . && ruff format --check .
 The code lives in `src/arize_assistant/`:
 
 - `cli.py`: the `arize` command and chat screen
+- `server.py`, `web/index.html`: the desktop app window and the local server behind it
+- `desktop.py`: opens the app window and creates shortcuts
 - `agent.py`: the loop that calls the model, runs tools, and repeats
 - `llm.py`: talks to the model server
 - `memory.py`: the memory database

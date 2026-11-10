@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,16 @@ _STOP = {
 }  # fmt: skip
 
 
+def _locked(method):
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    wrapper.__name__ = method.__name__
+    wrapper.__doc__ = method.__doc__
+    return wrapper
+
+
 @dataclass
 class Memory:
     id: int
@@ -32,7 +43,9 @@ class MemoryStore:
     def __init__(self, path: Path | str):
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(path))
+        # Shared by the app's request threads; every use goes through self._lock.
+        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._lock = threading.RLock()
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS memories ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created TEXT NOT NULL)"
@@ -47,6 +60,7 @@ class MemoryStore:
             self._fts = False
         self._db.commit()
 
+    @_locked
     def add(self, text: str) -> Memory:
         text = " ".join(text.split())
         if not text:
@@ -65,6 +79,7 @@ class MemoryStore:
         self._db.commit()
         return Memory(cur.lastrowid, text, created)
 
+    @_locked
     def forget(self, memory_id: int) -> bool:
         row = self._db.execute("SELECT text FROM memories WHERE id = ?", (memory_id,)).fetchone()
         if row is None:
@@ -78,16 +93,19 @@ class MemoryStore:
         self._db.commit()
         return True
 
+    @_locked
     def all(self) -> list[Memory]:
         rows = self._db.execute("SELECT id, text, created FROM memories ORDER BY id").fetchall()
         return [Memory(*r) for r in rows]
 
+    @_locked
     def recent(self, limit: int = 5) -> list[Memory]:
         rows = self._db.execute(
             "SELECT id, text, created FROM memories ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [Memory(*r) for r in reversed(rows)]
 
+    @_locked
     def search(self, query: str, limit: int = 5) -> list[Memory]:
         words = [w for w in _WORD.findall(query.lower()) if w not in _STOP and len(w) > 1]
         if not words:

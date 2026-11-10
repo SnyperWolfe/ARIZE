@@ -33,8 +33,22 @@ def ask_user(description: str) -> bool:
         return False
 
 
+_after_tool = False
+
+
+def stream_token(text: str) -> None:
+    global _after_tool
+    if _after_tool:
+        print(f"\n{BOLD}{CYAN}ARIZE ›{RESET} ", end="")
+        _after_tool = False
+    print(text, end="", flush=True)
+
+
 def show_event(kind: str, name: str, text: str) -> None:
+    global _after_tool
+    _after_tool = True
     if kind == "tool":
+        print()
         try:
             args = json.loads(text)
             shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
@@ -56,7 +70,9 @@ def build_agent(cfg: Config, yes: bool = False) -> Agent:
         confirm_actions=cfg.confirm_actions and not yes,
     )
     model = OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
-    return Agent(model, default_registry(ctx), memory, cfg.max_steps, on_event=show_event)
+    return Agent(
+        model, default_registry(ctx), memory, cfg.max_steps, on_event=show_event, think=cfg.think
+    )
 
 
 def print_memories(memory: MemoryStore) -> None:
@@ -92,8 +108,10 @@ def chat(agent: Agent, cfg: Config) -> int:
             else:
                 print(HELP)
             continue
+        print(f"\n{BOLD}{CYAN}ARIZE ›{RESET} ", end="", flush=True)
         try:
-            answer = agent.ask(line)
+            agent.ask(line, on_token=stream_token)
+            print()
         except LLMError as exc:
             agent.history.pop()  # drop the unanswered message so you can retry
             print(f"{YELLOW}{exc}{RESET}")
@@ -101,7 +119,6 @@ def chat(agent: Agent, cfg: Config) -> int:
         except KeyboardInterrupt:
             print(f"\n{DIM}(stopped){RESET}")
             continue
-        print(f"\n{BOLD}{CYAN}ARIZE ›{RESET} {answer}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_mem.add_argument("value", nargs="*")
     sub.add_parser("tools", help="list the tools ARIZE can use")
+    p_app = sub.add_parser("app", help="open ARIZE in its own window")
+    p_app.add_argument("--port", type=int, default=8765)
+    p_app.add_argument("--no-window", action="store_true", help="only start the server")
+    sub.add_parser("shortcut", help="put an ARIZE icon on the desktop and in the Start menu")
     args = parser.parse_args(argv)
 
     if args.command == "init":
@@ -133,6 +154,19 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config.load()
     if args.model:
         cfg.model = args.model
+
+    if args.command == "app":
+        from .desktop import run_app
+
+        return run_app(cfg, port=args.port, open_ui=not args.no_window)
+
+    if args.command == "shortcut":
+        from .desktop import create_shortcuts
+
+        for path in create_shortcuts():
+            print(f"Created {path}")
+        print("Double-click the ARIZE icon to open it.")
+        return 0
 
     if args.command == "tools":
         for t in ALL_TOOLS:
