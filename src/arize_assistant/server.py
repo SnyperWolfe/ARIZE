@@ -19,7 +19,7 @@ from itertools import count
 from . import __version__
 from .agent import Agent
 from .config import Config
-from .llm import ChatModel, LLMError, OpenAICompatibleModel
+from .llm import ChatModel, LLMError, make_model
 from .memory import MemoryStore
 from .tools import default_registry, make_context
 
@@ -37,7 +37,7 @@ class ArizeApp:
         self.cfg = cfg
         self.token = secrets.token_urlsafe(24)
         self.memory = MemoryStore(cfg.memory_path)
-        model = model or OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
+        model = model or make_model(cfg)
         look = getattr(model, "look", None)
         vision = (lambda png, q: look(png, q, cfg.vision_model)) if look else None
         ctx = make_context(cfg, self.memory, self._confirm, vision=vision)

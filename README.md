@@ -122,6 +122,14 @@ How fast ARIZE answers depends on the model and your computer:
   Silicon, automatically. Run `ollama ps` while ARIZE is answering: `100% GPU` is fast,
   `100% CPU` is slow.
 
+### If ARIZE stops answering in long conversations
+
+Models can only remember so much at once (`context_length`, 16384 word pieces by
+default). ARIZE asks Ollama for that much, but on a graphics card with little memory
+Ollama may be slow. If you get "I didn't get an answer back from the model", click
+**New chat**. On a big graphics card you can raise `context_length` to 32768; on a small
+one, lower it to 8192.
+
 ## Tools
 
 | Tool | What it does | Asks you first? |
@@ -156,6 +164,7 @@ recent ones, and gives them to the model. To see or change memories, use
 ```toml
 base_url = "http://localhost:11434/v1"   # Ollama; LM Studio is http://localhost:1234/v1
 model = "qwen3:8b"
+context_length = 16384                    # how much the model remembers (Ollama only)
 api_key = ""                              # only for hosted services
 max_steps = 30                            # tool steps allowed per message
 confirm_actions = true                    # ask before writing files / running commands

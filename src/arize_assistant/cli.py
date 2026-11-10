@@ -9,7 +9,7 @@ import sys
 from . import __version__
 from .agent import Agent
 from .config import Config, write_default_config
-from .llm import LLMError, OpenAICompatibleModel
+from .llm import LLMError, make_model
 from .memory import MemoryStore
 from .tools import ALL_TOOLS, default_registry, make_context
 
@@ -63,7 +63,7 @@ def show_event(kind: str, name: str, text: str) -> None:
 
 def build_agent(cfg: Config, yes: bool = False) -> Agent:
     memory = MemoryStore(cfg.memory_path)
-    model = OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
+    model = make_model(cfg)
     ctx = make_context(
         cfg,
         memory,

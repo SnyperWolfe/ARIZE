@@ -25,6 +25,10 @@ base_url = "http://localhost:11434/v1"
 # Pick a model that supports tool calling, e.g. qwen3, llama3.1, mistral-nemo
 model = "qwen3:8b"
 
+# How much the model can remember at once, in tokens (word pieces). Bigger needs more
+# memory on your graphics card. Ollama only; 8192 for small cards, 32768 for big ones.
+context_length = 16384
+
 # Only needed for hosted services; local servers ignore it.
 api_key = ""
 
@@ -61,6 +65,8 @@ class Config:
     base_url: str = "http://localhost:11434/v1"
     model: str = "qwen3:8b"
     api_key: str = ""
+    context_length: int = 16384
+    provider: str = "auto"  # auto, ollama or openai
     max_steps: int = 30
     confirm_actions: bool = True
     workspace: str = "~"

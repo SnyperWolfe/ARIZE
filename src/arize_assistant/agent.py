@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -43,8 +44,25 @@ Screen control: use `look_at_screen` to see, then act with `click`, `press_keys`
 after each action to check it worked. If the user takes back control, stop.
 {memories}"""
 
+EMPTY_NOTE = (
+    "Your last reply was empty. Reply to the user now in plain words: what you did, "
+    "what you found, or what you need from them."
+)
+STEPS_NOTE = (
+    "You've used all {n} tool steps for this message, so stop using tools. Tell the user "
+    "in plain words what you've done so far and what's left, and that they can say "
+    "'continue' to keep going."
+)
+EMPTY_ANSWER = (
+    "I didn't get an answer back from the model. This usually means the conversation got "
+    "too long for it to remember. Click **New chat** and ask again, or raise "
+    "`context_length` in the settings file."
+)
+
 # Qwen3 models write a long hidden "thinking" section unless told not to.
 NO_THINK = "\n/no_think"
+
+log = logging.getLogger("arize")
 
 _THINK = re.compile(r"<think>.*?(</think>\s*|$)", re.S)
 
@@ -129,7 +147,10 @@ class Agent:
             workspace=self.tools.ctx.workspace,
             memories=memories,
         )
-        return prompt if self.think else prompt + NO_THINK
+        # Ollama's own API switches thinking off directly; other servers need the hint.
+        if self.think or not getattr(self.model, "soft_think_switch", True):
+            return prompt
+        return prompt + NO_THINK
 
     def reset(self) -> None:
         self.history.clear()
@@ -141,9 +162,14 @@ class Agent:
         schemas = self.tools.schemas()
         for _ in range(self.max_steps):
             reply = self._chat([system, *self.history], schemas, on_token)
-            self.history.append(reply.as_message())
             if not reply.tool_calls:
-                return strip_thinking(reply.content)
+                text = strip_thinking(reply.content)
+                if text:
+                    self.history.append(reply.as_message())
+                    return text
+                log.warning("Model gave an empty reply; asking it to answer")
+                return self._final(system, on_token, EMPTY_NOTE)
+            self.history.append(reply.as_message())
             for call in reply.tool_calls:
                 self.on_event("tool", call.name, call.arguments)
                 output = self.tools.call(call.name, call.arguments)
@@ -151,16 +177,19 @@ class Agent:
                 self.history.append(
                     {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": output}
                 )
-        # Out of steps: ask for a final answer without tools.
-        self.history.append(
-            {
-                "role": "user",
-                "content": "You've used all your tool steps. Answer now with what you have.",
-            }
-        )
-        reply = self._chat([system, *self.history], [], on_token)
-        self.history.append(reply.as_message())
-        return strip_thinking(reply.content)
+        log.info("Used all %s tool steps", self.max_steps)
+        return self._final(system, on_token, STEPS_NOTE.format(n=self.max_steps))
+
+    def _final(self, system: dict, on_token: TokenHook | None, note: str) -> str:
+        """Ask for a plain answer without tools. The note itself isn't kept in history."""
+        nudge = {"role": "user", "content": note}
+        reply = self._chat([system, *self.history, nudge], [], on_token)
+        text = strip_thinking(reply.content)
+        if not text:
+            log.warning("Model gave an empty reply twice")
+            return EMPTY_ANSWER
+        self.history.append({"role": "assistant", "content": text})
+        return text
 
     def _chat(self, messages, tools, on_token):
         if on_token is None:

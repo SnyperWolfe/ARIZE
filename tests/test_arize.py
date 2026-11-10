@@ -619,3 +619,122 @@ def test_vision_errors_are_explained(screen):
     ctx.vision = broken
     out = reg.call("look_at_screen", "{}")
     assert "vision_model" in out and "qwen3-vl" in out
+
+
+# --- Ollama's own API and empty replies -------------------------------------------
+
+
+def _ollama(handler, **kw):
+    from arize_assistant.llm import OllamaModel
+
+    m = OllamaModel("http://localhost:11434/v1", "qwen3-vl:8b", **kw)
+    m._http = httpx.Client(
+        base_url="http://localhost:11434", transport=httpx.MockTransport(handler)
+    )
+    return m
+
+
+def test_ollama_sends_context_size_and_converts_history():
+    sent = {}
+
+    def handler(request):
+        assert request.url.path == "/api/chat"
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, json={
+            "message": {"role": "assistant", "content": "",
+                        "tool_calls": [{"function": {"name": "godot_project",
+                                                     "arguments": {"path": "game"}}}]},
+            "done": True, "prompt_eval_count": 1234,
+        })  # fmt: skip
+
+    m = _ollama(handler, context_length=16384)
+    history = [
+        {"role": "system", "content": "sys"},
+        Reply("", [call("look_at_screen", question="q")]).as_message(),
+        {"role": "tool", "tool_call_id": "c", "name": "look_at_screen", "content": "a window"},
+    ]
+    reply = m.chat(history, [{"type": "function"}])
+    assert sent["options"] == {"num_ctx": 16384} and sent["think"] is False
+    assert sent["stream"] is False and sent["tools"]
+    assert sent["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"question": "q"}
+    assert sent["messages"][2]["tool_name"] == "look_at_screen"
+    assert reply.tool_calls[0].name == "godot_project"
+    assert json.loads(reply.tool_calls[0].arguments) == {"path": "game"}
+    assert m.last_prompt_tokens == 1234
+
+
+def test_ollama_streaming_and_think_fallback():
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "think" in body:
+            return httpx.Response(400, json={"error": '"llama3.2" does not support thinking'})
+        lines = [
+            {"message": {"content": "Hel"}, "done": False},
+            {"message": {"content": "lo"}, "done": False},
+            {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "wait", "arguments": {"seconds": 1}}}]}, "done": False},
+            {"message": {"content": ""}, "done": True, "prompt_eval_count": 50},
+        ]  # fmt: skip
+        return httpx.Response(200, text="\n".join(json.dumps(x) for x in lines))
+
+    m = _ollama(handler)
+    pieces = []
+    reply = m.chat([{"role": "user", "content": "hi"}], [], pieces.append)
+    assert len(bodies) == 2 and "think" not in bodies[1]  # retried without think
+    assert pieces == ["Hel", "lo"] and reply.content == "Hello"
+    assert reply.tool_calls[0].name == "wait"
+    m.chat([{"role": "user", "content": "again"}], [], pieces.append)
+    assert len(bodies) == 3  # remembers not to send think
+
+
+def test_ollama_look_sends_image_and_missing_model_hint():
+    def handler(request):
+        body = json.loads(request.content)
+        if body["model"] == "missing":
+            return httpx.Response(404, json={"error": "model 'missing' not found"})
+        assert body["model"] == "qwen3-vl:4b" and body["messages"][0]["images"]
+        return httpx.Response(200, json={"message": {"content": "A button at (10, 20)"}})
+
+    m = _ollama(handler)
+    assert m.look(b"png", "where?", "qwen3-vl:4b") == "A button at (10, 20)"
+    from arize_assistant.llm import LLMError
+
+    with pytest.raises(LLMError, match="ollama pull"):
+        m.look(b"png", "where?", "missing")
+
+
+def test_make_model_picks_ollama_for_ollama_urls():
+    from arize_assistant.llm import OllamaModel, OpenAICompatibleModel, make_model
+
+    cfg = Config()
+    assert isinstance(make_model(cfg), OllamaModel)
+    cfg.base_url = "http://localhost:1234/v1"
+    assert isinstance(make_model(cfg), OpenAICompatibleModel)
+    cfg.provider = "ollama"
+    assert isinstance(make_model(cfg), OllamaModel)
+
+
+def test_empty_reply_is_retried_then_explained(make_ctx, memory):
+    from arize_assistant.agent import EMPTY_ANSWER
+
+    model = ScriptedModel([Reply("", [call("list_folder")]), Reply(""), Reply("I opened it.")])
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    assert agent.ask("open godot") == "I opened it."
+    assert "empty" in model.calls[-1][0][-1]["content"]  # the nudge
+    assert model.calls[-1][1] == []  # without tools
+    assert agent.history[-1] == {"role": "assistant", "content": "I opened it."}
+    assert all("last reply was empty" not in str(m.get("content")) for m in agent.history)
+
+    model.replies += [Reply(""), Reply("<think>...</think>")]
+    assert agent.ask("and now?") == EMPTY_ANSWER
+
+
+def test_no_think_hint_only_when_needed(make_ctx, memory):
+    model = ScriptedModel([Reply("ok")])
+    model.soft_think_switch = False  # like OllamaModel
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    agent.ask("hi")
+    assert "/no_think" not in model.calls[-1][0][0]["content"]
