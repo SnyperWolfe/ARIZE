@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,16 +20,46 @@ class ToolError(Exception):
     """A problem the model should hear about (bad path, refused action, ...)."""
 
 
+# Answers a question about an image: (png_bytes, question) -> answer text.
+Vision = Callable[[bytes, str], str]
+
+
 @dataclass
 class ToolContext:
     workspace: Path
     memory: MemoryStore
     confirm: Confirm
     confirm_actions: bool = True
+    vision: Vision | None = None
+    godot_path: str = ""
+    control_minutes: float = 10.0
+    # Kinds of action the user allowed for a while: name -> time.monotonic() deadline.
+    allowed_until: dict[str, float] = field(default_factory=dict)
 
     def allow(self, description: str) -> None:
         if self.confirm_actions and not self.confirm(description):
             raise ToolError("The user declined this action. Ask them how to proceed.")
+
+    def allow_for(self, key: str, minutes: float, description: str) -> None:
+        """Ask once, then allow this kind of action without asking for ``minutes``."""
+        if not self.confirm_actions or time.monotonic() < self.allowed_until.get(key, 0.0):
+            return
+        self.allow(description)
+        self.allowed_until[key] = time.monotonic() + minutes * 60
+
+    def allow_control(self) -> None:
+        """Ask before controlling the mouse and keyboard, then allow it for a while."""
+        m = self.control_minutes
+        shown = int(m) if m >= 1 else m
+        self.allow_for(
+            "control",
+            m,
+            f"Control your mouse and keyboard for the next {shown} minutes.\n"
+            "To stop it at any time, move your mouse into a corner of the screen.",
+        )
+
+    def stop_control(self) -> None:
+        self.allowed_until.pop("control", None)
 
     def resolve(self, path: str) -> Path:
         p = Path(path).expanduser()

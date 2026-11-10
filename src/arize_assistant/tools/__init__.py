@@ -1,13 +1,39 @@
 from __future__ import annotations
 
-from . import files, memory_tools, web
-from .base import Confirm, Tool, ToolContext, ToolError, ToolRegistry
+from ..config import Config
+from ..memory import MemoryStore
+from . import files, godot, memory_tools, screen, web
+from .base import Confirm, Tool, ToolContext, ToolError, ToolRegistry, Vision
 
-ALL_TOOLS: list[Tool] = [*web.TOOLS, *files.TOOLS, *memory_tools.TOOLS]
+ALL_TOOLS: list[Tool] = [
+    *web.TOOLS,
+    *files.TOOLS,
+    *memory_tools.TOOLS,
+    *godot.TOOLS,
+    *screen.TOOLS,
+]
 
 
 def default_registry(ctx: ToolContext) -> ToolRegistry:
     return ToolRegistry(ALL_TOOLS, ctx)
+
+
+def make_context(
+    cfg: Config,
+    memory: MemoryStore,
+    confirm: Confirm,
+    vision: Vision | None = None,
+    confirm_actions: bool | None = None,
+) -> ToolContext:
+    return ToolContext(
+        workspace=cfg.workspace_path,
+        memory=memory,
+        confirm=confirm,
+        confirm_actions=cfg.confirm_actions if confirm_actions is None else confirm_actions,
+        vision=vision,
+        godot_path=cfg.godot_path,
+        control_minutes=cfg.control_minutes,
+    )
 
 
 __all__ = [
@@ -17,5 +43,7 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "ToolRegistry",
+    "Vision",
     "default_registry",
+    "make_context",
 ]

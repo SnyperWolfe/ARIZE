@@ -399,3 +399,223 @@ def test_linux_shortcut(tmp_path, monkeypatch):
     assert len(made) == 2
     text = (tmp_path / "Desktop" / "arize.desktop").read_text()
     assert "-m arize_assistant app" in text and "arize.png" in text
+
+
+# --- Godot tools (with a stand-in Godot that prints Godot-style output) ------------
+
+FAKE_GODOT = r"""#!/usr/bin/env python3
+import sys, pathlib
+args = sys.argv[1:]
+log = pathlib.Path(__file__).with_name("calls.log")
+log.open("a").write(" ".join(args) + "\n")
+project = pathlib.Path(args[args.index("--path") + 1])
+if "--editor" in args and "--quit" in args:
+    (project / ".godot").mkdir(exist_ok=True)
+    sys.exit(0)
+script = (project / "main.gd").read_text()
+if "undefined_thing" in script:
+    print('SCRIPT ERROR: Parse Error: Identifier "undefined_thing" not declared'
+          ' in the current scope.')
+    print("          at: GDScript::reload (res://main.gd:5)")
+    print('ERROR: Failed to load script "res://main.gd" with error "Parse error".')
+    print("   at: load (modules/gdscript/gdscript.cpp:2936)")
+    sys.exit(1)
+print("Godot Engine v4.3.stable.official - https://godotengine.org")
+print("hello from ARIZE")
+"""
+
+
+@pytest.fixture
+def godot_ctx(make_ctx, tmp_path):
+    exe = tmp_path / "bin" / "godot"
+    exe.parent.mkdir()
+    exe.write_text(
+        FAKE_GODOT.replace("#!/usr/bin/env python3", "#!" + __import__("sys").executable)
+    )
+    exe.chmod(0o755)
+    ctx = make_ctx()
+    ctx.godot_path = str(exe)
+    return ctx, default_registry(ctx), exe
+
+
+def test_godot_build_test_fix_cycle(godot_ctx, tmp_path):
+    ctx, reg, exe = godot_ctx
+
+    def run(tool, **a):
+        return reg.call(tool, json.dumps(a))
+
+    assert "Created" in run(
+        "godot_new_project", path="game", name="My Game", main_scene="res://main.tscn"
+    )
+    project_file = (tmp_path / "game" / "project.godot").read_text()
+    assert 'config/name="My Game"' in project_file
+    assert 'run/main_scene="res://main.tscn"' in project_file
+    run("write_file", path="game/main.gd", content="extends Node2D\nvar x = undefined_thing\n")
+
+    out = run("godot_run", path="game", seconds=1)
+    assert "Imported the project first" in out
+    assert "2 problem(s) found" in out
+    assert 'Identifier "undefined_thing" not declared' in out and "res://main.gd:5" in out
+    calls = (exe.parent / "calls.log").read_text().splitlines()
+    assert calls[0].startswith("--headless --path") and calls[0].endswith("--editor --quit")
+    assert calls[1].endswith("--quit-after 60")
+
+    run("write_file", path="game/main.gd", content="extends Node2D\n")
+    out = run("godot_run", path="game")
+    assert "No errors or warnings" in out and "exit code 0" in out
+    assert "Imported" not in out  # only the first time
+    # Permission to test-run was asked once, then remembered.
+    assert sum("Run Godot projects" in a for a in ctx.asked) == 1
+
+    info = run("godot_project", path="game")
+    assert 'Name: "My Game"' in info and "res://main.gd" in info and str(exe) in info
+    assert "game" in run("godot_project", path=".")
+    assert "isn't a Godot project" in run("godot_run", path=".")
+    run("godot_set_main_scene", path="game", scene="levels/one.tscn")
+    assert 'run/main_scene="res://levels/one.tscn"' in (tmp_path / "game/project.godot").read_text()
+
+
+def test_godot_missing_program(make_ctx, tmp_path, monkeypatch):
+    from arize_assistant.tools import godot
+
+    monkeypatch.setattr(godot, "_candidates", lambda: [])
+    ctx = make_ctx()
+    reg = default_registry(ctx)
+    reg.call("godot_new_project", json.dumps({"path": "g", "name": "G"}))
+    out = reg.call("godot_run", json.dumps({"path": "g"}))
+    assert "Godot wasn't found" in out and "godot_path" in out
+
+
+# --- screen control (with a fake mouse, keyboard and screen) --------------------
+
+
+class FakeDesktop:
+    def __init__(self):
+        self.actions = []
+        self.fail = False
+
+    def size(self):
+        return (1920, 1080)
+
+    def screenshot(self):
+        from PIL import Image
+
+        return Image.new("RGB", (1920, 1080), (20, 30, 40))
+
+    def _do(self, *a):
+        if self.fail:
+            raise type("FailSafeException", (Exception,), {})("corner")
+        self.actions.append(a)
+
+    def click(self, x, y, button, clicks):
+        self._do("click", x, y, button, clicks)
+
+    def move(self, x, y):
+        self._do("move", x, y)
+
+    def drag(self, *a):
+        self._do("drag", *a)
+
+    def write(self, text):
+        self._do("write", text)
+
+    def key_down(self, k):
+        self._do("down", k)
+
+    def key_up(self, k):
+        self._do("up", k)
+
+    def scroll(self, *a):
+        self._do("scroll", *a)
+
+    def windows(self):
+        return ["Godot Engine - My Game", "ARIZE"]
+
+    def focus(self, title):
+        self._do("focus", title)
+        return "Godot Engine - My Game"
+
+
+@pytest.fixture
+def screen(make_ctx, monkeypatch):
+    from arize_assistant.tools import screen as screen_mod
+
+    fake = FakeDesktop()
+    monkeypatch.setattr(screen_mod, "_desktop", fake)
+    seen = {}
+
+    def vision(png, question):
+        from PIL import Image
+
+        seen["size"] = Image.open(__import__("io").BytesIO(png)).size
+        seen["question"] = question
+        return "The Play button is at (500, 620)."
+
+    ctx = make_ctx()
+    ctx.vision = vision
+    return ctx, default_registry(ctx), fake, seen
+
+
+def test_look_and_click(screen):
+    ctx, reg, fake, seen = screen
+    out = reg.call("look_at_screen", json.dumps({"question": "Where is Play?"}))
+    assert out == "The Play button is at (500, 620)."
+    assert seen["size"] == (1280, 720)  # shrunk for the model
+    assert "0-1000 grid" in seen["question"] and "Where is Play?" in seen["question"]
+    assert ctx.asked == []  # looking doesn't need permission
+
+    assert "clicked" in reg.call("click", json.dumps({"x": 500, "y": 620}))
+    assert fake.actions[-1] == ("click", 960, 669, "left", 1)
+    reg.call("click", json.dumps({"x": 0, "y": 1000, "clicks": 2}))
+    assert fake.actions[-1] == ("click", 3, 1076, "left", 2)  # kept clear of the corner
+    assert "between 0 and 1000" in reg.call("click", json.dumps({"x": 1200, "y": 5}))
+    # Permission is asked once for the whole control session.
+    assert len(ctx.asked) == 1 and "mouse and keyboard" in ctx.asked[0]
+
+
+def test_keys_and_hold(screen):
+    ctx, reg, fake, _ = screen
+    reg.call("press_keys", json.dumps({"keys": "Control + S"}))
+    assert fake.actions == [("down", "ctrl"), ("down", "s"), ("up", "s"), ("up", "ctrl")]
+    fake.actions.clear()
+    out = reg.call("hold_keys", json.dumps({"keys": "shift+w", "seconds": 0.1}))
+    assert "Held shift+w" in out
+    assert fake.actions == [("down", "shift"), ("down", "w"), ("up", "w"), ("up", "shift")]
+    fake.actions.clear()
+    reg.call("press_keys", json.dumps({"keys": "space", "times": 3}))
+    assert fake.actions.count(("down", "space")) == 3
+    reg.call("type_text", json.dumps({"text": "hello"}))
+    assert fake.actions[-1] == ("write", "hello")
+    assert "Godot Engine" in reg.call("list_windows", "{}")
+    assert "Brought 'Godot Engine - My Game'" in reg.call(
+        "focus_window", json.dumps({"title": "godot"})
+    )
+
+
+def test_corner_stop_and_denied_control(screen, make_ctx, monkeypatch):
+    ctx, reg, fake, _ = screen
+    reg.call("click", json.dumps({"x": 10, "y": 10}))
+    fake.fail = True
+    out = reg.call("press_keys", json.dumps({"keys": "w"}))
+    assert "moved the mouse into a corner" in out
+    fake.fail = False
+    reg.call("click", json.dumps({"x": 10, "y": 10}))
+    assert len(ctx.asked) == 2  # after a corner-stop, permission is asked again
+
+    from arize_assistant.tools import screen as screen_mod
+
+    denied = make_ctx(answer=False)
+    monkeypatch.setattr(screen_mod, "_desktop", FakeDesktop())
+    out = default_registry(denied).call("click", json.dumps({"x": 1, "y": 1}))
+    assert "declined" in out and screen_mod._desktop.actions == []
+
+
+def test_vision_errors_are_explained(screen):
+    ctx, reg, _, _ = screen
+
+    def broken(png, q):
+        raise RuntimeError("model does not support images")
+
+    ctx.vision = broken
+    out = reg.call("look_at_screen", "{}")
+    assert "vision_model" in out and "qwen3-vl" in out

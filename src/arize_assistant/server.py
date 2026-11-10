@@ -21,7 +21,7 @@ from .agent import Agent
 from .config import Config
 from .llm import ChatModel, LLMError, OpenAICompatibleModel
 from .memory import MemoryStore
-from .tools import ToolContext, default_registry
+from .tools import default_registry, make_context
 
 CONFIRM_TIMEOUT = 300  # seconds to wait for Allow / Deny before treating it as Deny
 STATIC = {
@@ -37,8 +37,10 @@ class ArizeApp:
         self.cfg = cfg
         self.token = secrets.token_urlsafe(24)
         self.memory = MemoryStore(cfg.memory_path)
-        ctx = ToolContext(cfg.workspace_path, self.memory, self._confirm, cfg.confirm_actions)
         model = model or OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
+        look = getattr(model, "look", None)
+        vision = (lambda png, q: look(png, q, cfg.vision_model)) if look else None
+        ctx = make_context(cfg, self.memory, self._confirm, vision=vision)
         self.agent = Agent(
             model,
             default_registry(ctx),

@@ -61,6 +61,39 @@ it. ARIZE shuts down on its own about a minute after you close the window.
 
 ![ARIZE desktop app](docs/screenshot.png)
 
+## Building games in Godot
+
+ARIZE can build and fix Godot 4 games with you. Ask things like:
+
+- *"Make a new Godot game in Documents/Games/dodge where a player dodges falling rocks."*
+- *"Look at my project in Documents/Godot/platformer and add double-jump."*
+- *"My game crashes when the enemy dies, find out why and fix it."*
+
+ARIZE reads your project, writes GDScript and scenes, then **test-runs the game in the
+background and reads Godot's errors**, fixing them until the game runs cleanly. It can
+also open your game in a window (`godot_play`) or open the Godot editor.
+
+ARIZE looks for Godot in the usual places (Downloads, Desktop, Program Files, Steam).
+If it can't find it, put the full path in your settings file, e.g.
+`godot_path = "C:/Users/you/Downloads/Godot_v4.3-stable_win64.exe"`.
+
+## Screen control
+
+ARIZE can see your screen and use your mouse and keyboard, so it can click around the
+Godot editor, menus, or a game. Ask things like *"Open the Godot window and click
+Run"* or *"In the game, walk forward for 3 seconds then press E"*.
+
+- **Safety:** the first time, ARIZE asks permission to control your mouse and keyboard
+  for the next 10 minutes. **To stop it instantly, move your mouse into any corner of
+  the screen.**
+- **It needs a model that can see.** Run `ollama pull qwen3-vl:8b`, then either use it
+  as your main model (`model = "qwen3-vl:8b"`) or only for looking
+  (`vision_model = "qwen3-vl:8b"`).
+- **It's slow:** every look takes a few seconds. That's fine for menus, editors, and
+  turn-based or slow games, but too slow for fast action games.
+- Don't use it in online multiplayer games: automation is against most of their rules
+  and can get your account banned.
+
 ## Using it
 
 | Command | What it does |
@@ -99,6 +132,11 @@ How fast ARIZE answers depends on the model and your computer:
 | `write_file` | Creates or changes a file | **Yes** |
 | `run_command` | Runs a terminal command | **Yes** |
 | `remember`, `search_memory`, `forget` | Manages its long-term memory | No |
+| `godot_project`, `godot_editor` | Reads a Godot project, opens the editor | No |
+| `godot_new_project`, `godot_set_main_scene` | Creates a project, sets its first scene | **Yes** |
+| `godot_run`, `godot_play` | Test-runs the game and reads errors, or opens it in a window | **Yes**, once per 15 min |
+| `look_at_screen`, `list_windows`, `wait` | Sees the screen, lists windows | No |
+| `click`, `drag`, `move_mouse`, `scroll`, `type_text`, `press_keys`, `hold_keys`, `focus_window` | Uses your mouse and keyboard | **Yes**, once per 10 min |
 
 ARIZE can only touch files inside your **workspace** folder (your home folder by
 default; change it in settings).
@@ -119,10 +157,13 @@ recent ones, and gives them to the model. To see or change memories, use
 base_url = "http://localhost:11434/v1"   # Ollama; LM Studio is http://localhost:1234/v1
 model = "qwen3:8b"
 api_key = ""                              # only for hosted services
-max_steps = 8                             # tool steps allowed per message
+max_steps = 30                            # tool steps allowed per message
 confirm_actions = true                    # ask before writing files / running commands
 workspace = "~"                           # folder ARIZE may read and write in
 think = false                             # let qwen3 "think" first: smarter, much slower
+vision_model = ""                         # model for seeing the screen, e.g. "qwen3-vl:8b"
+godot_path = ""                           # full path to Godot 4 if ARIZE can't find it
+control_minutes = 10                      # how long screen-control permission lasts
 ```
 
 Every setting can also be set with an environment variable, e.g. `ARIZE_MODEL=llama3.1`.
@@ -147,7 +188,8 @@ The code lives in `src/arize_assistant/`:
 - `agent.py`: the loop that calls the model, runs tools, and repeats
 - `llm.py`: talks to the model server
 - `memory.py`: the memory database
-- `tools/`: web, file/command, and memory tools. To add a tool, write a function
+- `tools/`: web, file/command, memory, Godot (`godot.py`) and screen-control
+  (`screen.py`) tools. To add a tool, write a function
   and add a `Tool(...)` entry to a module's `TOOLS` list.
 
 ## License

@@ -286,6 +286,13 @@ const TOOL_LABELS = {
   web_search: "Searching the web", read_webpage: "Reading a page", read_file: "Reading a file",
   list_folder: "Looking at files", write_file: "Writing a file", run_command: "Running a command",
   remember: "Saving a memory", search_memory: "Searching memory", forget: "Forgetting",
+  godot_project: "Reading Godot project", godot_new_project: "Creating Godot project",
+  godot_set_main_scene: "Setting main scene", godot_run: "Test-running the game",
+  godot_play: "Launching the game", godot_editor: "Opening Godot",
+  look_at_screen: "Looking at the screen", click: "Clicking", move_mouse: "Moving the mouse",
+  drag: "Dragging", type_text: "Typing", press_keys: "Pressing keys", hold_keys: "Holding keys",
+  scroll: "Scrolling", wait: "Waiting", list_windows: "Checking windows",
+  focus_window: "Switching window",
 };
 
 function api(path, opts = {}) {
@@ -443,7 +450,8 @@ async function send(text) {
 function describeArgs(json) {
   try {
     const a = JSON.parse(json);
-    const v = a.query || a.url || a.path || a.command || a.fact;
+    const v = a.query || a.url || a.path || a.command || a.fact || a.question || a.keys
+      || a.title || a.text || (a.x !== undefined ? `(${a.x}, ${a.y})` : "");
     return v ? ": " + String(v).slice(0, 80) : "";
   } catch { return ""; }
 }

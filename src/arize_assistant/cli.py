@@ -11,7 +11,7 @@ from .agent import Agent
 from .config import Config, write_default_config
 from .llm import LLMError, OpenAICompatibleModel
 from .memory import MemoryStore
-from .tools import ALL_TOOLS, ToolContext, default_registry
+from .tools import ALL_TOOLS, default_registry, make_context
 
 DIM, BOLD, CYAN, YELLOW, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[33m", "\033[0m"
 if sys.stdout is None or not sys.stdout.isatty():
@@ -63,13 +63,14 @@ def show_event(kind: str, name: str, text: str) -> None:
 
 def build_agent(cfg: Config, yes: bool = False) -> Agent:
     memory = MemoryStore(cfg.memory_path)
-    ctx = ToolContext(
-        workspace=cfg.workspace_path,
-        memory=memory,
-        confirm=ask_user,
+    model = OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
+    ctx = make_context(
+        cfg,
+        memory,
+        ask_user,
+        vision=lambda png, q: model.look(png, q, cfg.vision_model),
         confirm_actions=cfg.confirm_actions and not yes,
     )
-    model = OpenAICompatibleModel(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout)
     return Agent(
         model, default_registry(ctx), memory, cfg.max_steps, on_event=show_event, think=cfg.think
     )

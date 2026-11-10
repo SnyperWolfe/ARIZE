@@ -4,13 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arize-assistant"
-version = "0.1.0"
+version = "0.2.0"
 description = "ARIZE — a private AI assistant that runs on your own computer, with tools and long-term memory"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
     "httpx>=0.27",
+    # Screen control: screenshots, mouse and keyboard
+    "mss>=9",
+    "pillow>=10",
+    "pyautogui>=0.9.54",
+    "pydirectinput>=1.0.4; sys_platform == 'win32'",
     "tomli>=2.0; python_version < '3.11'",
 ]
 

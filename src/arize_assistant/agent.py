@@ -21,6 +21,26 @@ answer than guessing; never invent search results, file contents or command outp
 Memory: when the user tells you something worth knowing later (their name, preferences,
 people, projects, plans), save it with `remember` without being asked. If a saved memory
 turns out to be wrong or the user asks you to forget it, use `forget`.
+
+Godot: the user makes games in Godot 4 with GDScript. Always write Godot 4 code, never
+Godot 3: `extends CharacterBody2D`, `@export var speed := 200.0`, `@onready var sprite =
+$Sprite2D`, set `velocity` then call `move_and_slide()` with no arguments,
+`Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")`, `body_entered.connect(_on_hit)`,
+`await get_tree().create_timer(1.0).timeout`, `instantiate()` (not instance()).
+How to work: look first with `godot_project`; write scripts and scenes with `write_file`;
+then ALWAYS check with `godot_run` and fix every error it reports before telling the user
+it works. Keep .tscn files simple, or build nodes in code inside `_ready()`. A minimal scene:
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://main.gd" id="1"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1")
+
+Screen control: use `look_at_screen` to see, then act with `click`, `press_keys`,
+`hold_keys`, `type_text` using the (x, y) 0-1000 positions it gives you. Use
+`focus_window` to bring a program forward first. Work in small steps and look again
+after each action to check it worked. If the user takes back control, stop.
 {memories}"""
 
 # Qwen3 models write a long hidden "thinking" section unless told not to.

@@ -74,6 +74,26 @@ class OpenAICompatibleModel:
         except httpx.HTTPError as exc:
             raise self._unreachable(exc) from exc
 
+    def look(self, png: bytes, question: str, model: str = "") -> str:
+        """Ask a vision-capable model a question about an image."""
+        import base64
+
+        image = "data:image/png;base64," + base64.b64encode(png).decode()
+        body = {
+            "model": model or self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": question},
+                        {"type": "image_url", "image_url": {"url": image}},
+                    ],
+                }
+            ],
+        }
+        msg = self._post(body).json()["choices"][0]["message"]
+        return msg.get("content") or ""
+
     def _post(self, body: dict) -> httpx.Response:
         try:
             resp = self._http.post("/chat/completions", json=body)

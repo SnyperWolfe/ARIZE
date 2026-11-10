@@ -29,7 +29,7 @@ model = "qwen3:8b"
 api_key = ""
 
 # How many tool steps ARIZE may take for a single message.
-max_steps = 8
+max_steps = 30
 
 # Ask before writing files or running commands. Set to false at your own risk.
 confirm_actions = true
@@ -39,6 +39,16 @@ workspace = "~"
 
 # Let models like qwen3 "think" before answering: smarter but much slower.
 think = false
+
+# Model used to look at your screen. Leave empty to use the main model; it must be
+# able to see images, e.g. qwen3-vl:8b
+vision_model = ""
+
+# Full path to the Godot 4 program. Leave empty to search the usual places.
+godot_path = ""
+
+# After you allow screen control, how many minutes before ARIZE has to ask again.
+control_minutes = 10
 """
 
 
@@ -51,10 +61,13 @@ class Config:
     base_url: str = "http://localhost:11434/v1"
     model: str = "qwen3:8b"
     api_key: str = ""
-    max_steps: int = 8
+    max_steps: int = 30
     confirm_actions: bool = True
     workspace: str = "~"
     think: bool = False
+    vision_model: str = ""
+    godot_path: str = ""
+    control_minutes: float = 10.0
     timeout: float = 300.0
     home: Path = field(default_factory=home_dir)
 
