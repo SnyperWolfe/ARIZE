@@ -14,7 +14,7 @@ from .memory import MemoryStore
 from .tools import ALL_TOOLS, ToolContext, default_registry
 
 DIM, BOLD, CYAN, YELLOW, RESET = "\033[2m", "\033[1m", "\033[36m", "\033[33m", "\033[0m"
-if not sys.stdout.isatty():
+if sys.stdout is None or not sys.stdout.isatty():
     DIM = BOLD = CYAN = YELLOW = RESET = ""
 
 HELP = """Commands:
