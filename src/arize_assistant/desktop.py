@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 
+from . import __version__
 from .config import Config, write_default_config
 
 DEFAULT_PORT = 8765
@@ -76,12 +77,32 @@ def open_window(url: str, cfg: Config) -> None:
 # --- running the app ------------------------------------------------------------
 
 
-def _already_running(port: int) -> bool:
+def _running_version(port: int) -> str | None:
+    """Version of the ARIZE app already running on ``port``, or None."""
     try:
         r = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=1)
-        return r.json().get("app") == "arize"
+        data = r.json()
     except (httpx.HTTPError, ValueError):
+        return None
+    if data.get("app") != "arize":
+        return None
+    return str(data.get("version", "old"))
+
+
+def _stop_old(cfg: Config, port: int) -> bool:
+    """Ask an older ARIZE still running in the background to quit (after an update)."""
+    try:
+        token = (cfg.home / "app.token").read_text(encoding="utf-8").strip()
+        httpx.post(
+            f"http://127.0.0.1:{port}/api/shutdown", headers={"X-Arize-Token": token}, timeout=3
+        )
+    except (OSError, httpx.HTTPError):
         return False
+    for _ in range(50):
+        if _running_version(port) is None:
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def run_app(cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True) -> int:
@@ -94,17 +115,26 @@ def run_app(cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True) -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    if _already_running(port):
+    running = _running_version(port)
+    if running == __version__:
         log.info("ARIZE already running on port %s; opening another window", port)
         if open_ui:
             open_window(f"http://127.0.0.1:{port}/", cfg)
         return 0
+    if running is not None:
+        log.info("Replacing ARIZE %s still running on port %s", running, port)
+        if not _stop_old(cfg, port):
+            log.warning("Couldn't stop the old ARIZE; starting on another port")
     app = ArizeApp(cfg)
     try:
         server = make_server(app, port)
     except OSError:
         server = make_server(app, 0)  # port taken by something else: pick any free one
     url = f"http://127.0.0.1:{server.server_address[1]}/"
+    try:  # lets the next version (after an update) ask this one to quit
+        (cfg.home / "app.token").write_text(app.token, encoding="utf-8")
+    except OSError:
+        pass
     log.info("ARIZE app listening on %s (model %s)", url, cfg.model)
     if open_ui:
         app.last_seen = time.monotonic() + 60  # give the window time to open

@@ -86,7 +86,10 @@ def _console_variant(exe: str) -> str:
 
 
 def _project_dir(ctx: ToolContext, path: str) -> Path:
+    """The project folder for ``path``; "." means the project already being worked on."""
     p = ctx.resolve(path)
+    if path in ("", ".") and not (p / "project.godot").exists() and ctx.godot_project:
+        p = ctx.godot_project
     if p.is_file() and p.name == "project.godot":
         p = p.parent
     if not (p / "project.godot").exists():
@@ -97,6 +100,7 @@ def _project_dir(ctx: ToolContext, path: str) -> Path:
             else ""
         )
         raise ToolError(f"{path} isn't a Godot project (no project.godot).{hint}")
+    ctx.godot_project = p
     return p
 
 
@@ -206,6 +210,7 @@ def godot_new_project(
         raise ToolError("renderer must be forward_plus, mobile or gl_compatibility")
     ctx.allow(f"Create a new Godot project '{name}' in {project}")
     project.mkdir(parents=True, exist_ok=True)
+    ctx.godot_project = project
     main = f'run/main_scene="{main_scene}"\n' if main_scene else ""
     text = PROJECT_FILE.format(name=name.replace('"', "'"), main=main, renderer=renderer)
     (project / "project.godot").write_text(text, encoding="utf-8")

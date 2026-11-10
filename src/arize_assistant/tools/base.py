@@ -33,6 +33,8 @@ class ToolContext:
     vision: Vision | None = None
     godot_path: str = ""
     control_minutes: float = 10.0
+    # The Godot project being worked on; "res://" paths are inside it.
+    godot_project: Path | None = None
     # Kinds of action the user allowed for a while: name -> time.monotonic() deadline.
     allowed_until: dict[str, float] = field(default_factory=dict)
 
@@ -62,6 +64,13 @@ class ToolContext:
         self.allowed_until.pop("control", None)
 
     def resolve(self, path: str) -> Path:
+        if path.startswith("res://"):
+            if self.godot_project is None:
+                raise ToolError(
+                    f"{path} is a Godot path. Call godot_project with the project folder "
+                    "first, or use the full path."
+                )
+            path = str(self.godot_project / path[len("res://") :])
         p = Path(path).expanduser()
         if not p.is_absolute():
             p = self.workspace / p

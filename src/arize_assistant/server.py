@@ -176,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
             name, ctype = STATIC[path]
             return self._send(200, _static(name), ctype)
         if path == "/api/health":  # lets a second launch find the running app
-            return self._json({"app": "arize"})
+            return self._json({"app": "arize", "version": __version__})
         if not self._token_ok():
             return self._send(403, b"Forbidden", "text/plain")
         self.app.last_seen = time.monotonic()
@@ -207,6 +207,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/new":
             with self.app.busy:
                 self.app.agent.reset()
+            return self._json({"ok": True})
+        if path == "/api/shutdown":  # used by a newer version replacing this one
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
             return self._json({"ok": True})
         if path == "/api/memories/delete":
             return self._json({"ok": self.app.memory.forget(int(body.get("id", 0)))})

@@ -470,7 +470,12 @@ def test_godot_build_test_fix_cycle(godot_ctx, tmp_path):
     info = run("godot_project", path="game")
     assert 'Name: "My Game"' in info and "res://main.gd" in info and str(exe) in info
     assert "game" in run("godot_project", path=".")
-    assert "isn't a Godot project" in run("godot_run", path=".")
+    assert "No errors" in run("godot_run", path=".")  # "." = the current project
+    assert "isn't a Godot project" in run("godot_run", path="bin")
+    # Godot's res:// paths work in the file tools once a project is known.
+    assert run("read_file", path="res://main.gd") == "extends Node2D\n"
+    assert "Wrote" in run("write_file", path="res://player.gd", content="extends Node\n")
+    assert (tmp_path / "game" / "player.gd").exists()
     run("godot_set_main_scene", path="game", scene="levels/one.tscn")
     assert 'run/main_scene="res://levels/one.tscn"' in (tmp_path / "game/project.godot").read_text()
 
@@ -738,3 +743,30 @@ def test_no_think_hint_only_when_needed(make_ctx, memory):
     agent = Agent(model, default_registry(make_ctx()), memory)
     agent.ask("hi")
     assert "/no_think" not in model.calls[-1][0][0]["content"]
+
+
+def test_res_paths_need_a_project(make_ctx):
+    reg = default_registry(make_ctx())
+    out = reg.call("read_file", json.dumps({"path": "res://main.gd"}))
+    assert "Godot path" in out and "godot_project" in out
+
+
+def test_new_version_replaces_old_running_app(tmp_path, monkeypatch):
+    import threading
+
+    from arize_assistant import desktop, server
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    cfg = Config.load()
+    old = server.ArizeApp(cfg, model=ScriptedModel([]))
+    srv = server.make_server(old, 0)
+    port = srv.server_address[1]
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    monkeypatch.setattr(server, "__version__", "0.0.1")  # pretend it's an old version
+    assert desktop._running_version(port) == "0.0.1"
+    assert not desktop._stop_old(cfg, port)  # no token file: can't stop it
+    (tmp_path / "app.token").write_text(old.token)
+    assert desktop._stop_old(cfg, port)
+    t.join(timeout=5)
+    assert not t.is_alive() and desktop._running_version(port) is None
