@@ -145,7 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     p_app.add_argument("--port", type=int, default=8765)
     p_app.add_argument("--no-window", action="store_true", help="only start the server")
     sub.add_parser("shortcut", help="put an ARIZE icon on the desktop and in the Start menu")
+    p_mob = sub.add_parser("mobile", help="run the phone edition (Android, in Termux)")
+    p_mob.add_argument("--port", type=int, default=8765)
+    p_mob.add_argument("--no-open", action="store_true", help="don't open the app in Chrome")
     args = parser.parse_args(argv)
+
+    if args.command == "mobile":
+        from .mobile import run_mobile
+
+        return run_mobile(port=args.port, open_ui=not args.no_open)
 
     if args.command == "init":
         path = write_default_config(force=False)

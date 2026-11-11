@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#04070c">
+<title>ARIZE</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+  :root {
+    --bg: #04070c; --panel: rgba(14, 26, 38, 0.75); --sheet: #0b1520;
+    --line: rgba(80, 210, 255, 0.2); --cyan: #46dcff; --amber: #ffb547; --red: #ff5a6a;
+    --red-text: #ff8a96; --green: #5ee39b; --text: #d8f3ff; --muted: #8fb0c2;
+    --hud: "Bahnschrift", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+    --mono: "Roboto Mono", "Droid Sans Mono", ui-monospace, monospace;
+    --accent: var(--cyan);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, Roboto, sans-serif; overscroll-behavior: none; }
+  body.st-tool { --accent: var(--amber); }
+  body.st-listening { --accent: var(--red); }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  .app { height: 100dvh; display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  .view { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .view.on { display: flex; }
+
+  /* core */
+  /* No ".core" ancestor in these: the rings are drawn once in <symbol id="core"> and
+     reused with <use>, and copies only pick up rules that match the original. */
+  .r { fill: none; stroke: var(--accent); transform-origin: 200px 200px; transition: stroke .4s; }
+  .glow { fill: var(--accent); opacity: .2; transform-origin: 200px 200px;
+    animation: breathe 4s ease-in-out infinite; transition: fill .4s; }
+  .mark { fill: none; stroke: #e6fbff; stroke-width: 6; stroke-linejoin: round; }
+  .r1 { stroke-width: 8; stroke-dasharray: 26 14; animation: spin 40s linear infinite; }
+  .r2 { stroke-width: 1.5; opacity: .55; }
+  .r3 { stroke-width: 12; stroke-dasharray: 150 70; animation: spin 18s linear infinite reverse; }
+  .r4 { stroke-width: 2; stroke-dasharray: 3 9; opacity: .8; animation: spin 60s linear infinite; }
+  .r5 { stroke-width: 5; }
+  body.st-thinking .r1 { animation-duration: 6s; } body.st-thinking .r3 { animation-duration: 2.4s; }
+  body.st-thinking .glow, body.st-listening .glow, body.st-speaking .glow { animation-duration: 1s; opacity: .4; }
+  body.st-tool .r3 { animation-duration: 3s; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 50% { transform: scale(1.35); opacity: .06; } }
+
+  /* chat header (shown once a conversation starts) */
+  .chathead { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px;
+    border-bottom: 1px solid rgba(80,210,255,.14); background: rgba(6,12,19,.92); }
+  .chathead .core { width: 40px; height: 40px; flex: none; }
+  .who { flex: 1; min-width: 0; }
+  .brand { font-family: var(--hud); font-weight: 600; letter-spacing: .38em; }
+  .status { font-family: var(--hud); font-weight: 600; font-size: 12px; letter-spacing: .2em;
+    color: var(--accent); text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--line);
+    background: transparent; display: grid; place-items: center; flex: none; }
+  .icon-btn svg { width: 20px; height: 20px; }
+
+  /* home */
+  .home { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center;
+    gap: 16px; padding: 12px 20px 8px;
+    background: radial-gradient(ellipse at 50% 26%, rgba(40,140,200,.2), transparent 62%); }
+  .home .top { align-self: stretch; display: flex; justify-content: space-between; align-items: center; }
+  .home .core { width: min(62vw, 240px); height: auto; margin-top: 6px; }
+  .home h1 { margin: 0; font-family: var(--hud); font-weight: 600; font-size: 30px; letter-spacing: .03em;
+    line-height: 1.15; text-align: center; }
+  .home p { margin: 0; color: var(--muted); text-align: center; }
+  .model-line { font-family: var(--mono); font-size: 11px; color: #7f9cae; text-align: center; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .chip { min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line);
+    background: rgba(14,26,38,.6); font-size: 14px; font-weight: 500; }
+
+  /* messages */
+  .msgs { flex: 1; overflow-y: auto; padding: 16px 16px 8px; display: none; flex-direction: column; gap: 18px; }
+  .chatting .home { display: none; } .chatting .msgs { display: flex; } .chatting .chathead { display: flex; }
+  .chathead { display: none; }
+  .me { align-self: flex-end; max-width: 84%; padding: 11px 15px; border-radius: 20px 20px 6px 20px;
+    background: rgba(70,220,255,.12); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .bot { display: flex; flex-direction: column; gap: 8px; }
+  .bot .label { font-family: var(--hud); font-weight: 600; font-size: 12px; letter-spacing: .32em; color: var(--cyan); }
+  .steps { margin: 0; padding: 10px 12px; list-style: none; display: none; flex-direction: column; gap: 6px;
+    border-radius: 14px; background: var(--panel); border: 1px solid rgba(80,210,255,.12);
+    font: 12px/1.4 var(--mono); color: #93b2c3; }
+  .steps.has { display: flex; }
+  .steps li { display: flex; gap: 8px; } .steps li span:last-child { min-width: 0; overflow-wrap: anywhere; }
+  .steps .ok { color: var(--green); } .steps .bad { color: var(--red-text); } .steps .run { color: var(--amber); }
+  .text { padding-left: 14px; border-left: 2px solid var(--cyan); overflow-wrap: anywhere; }
+  .bot.error .text { border-left-color: var(--red); color: #ffc3c9; }
+  .text p { margin: 0 0 10px; } .text p:last-child { margin: 0; }
+  .text ul, .text ol { margin: 0 0 10px; padding-left: 20px; }
+  .text pre { margin: 0 0 10px; padding: 10px; border-radius: 10px; background: rgba(0,0,0,.45);
+    border: 1px solid var(--line); overflow-x: auto; font: 13px/1.45 var(--mono); }
+  .text code { font-family: var(--mono); font-size: .9em; padding: 1px 5px; border-radius: 6px; background: rgba(70,220,255,.12); }
+  .text pre code { padding: 0; background: none; }
+  .text a { color: var(--cyan); }
+  .cursor::after { content: "▍"; color: var(--cyan); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* composer */
+  .composer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
+  .field { flex: 1; display: flex; align-items: center; min-height: 54px; padding: 0 18px; border-radius: 27px;
+    border: 1px solid rgba(80,210,255,.26); background: rgba(14,26,38,.85); }
+  .field:focus-within { border-color: rgba(70,220,255,.6); }
+  .field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 16px; }
+  .field input::placeholder { color: #7f9cae; }
+  .act { width: 54px; height: 54px; border-radius: 50%; border: 0; flex: none; display: grid; place-items: center;
+    background: var(--cyan); color: #03222b; box-shadow: 0 0 20px rgba(70,220,255,.4); }
+  .act svg { width: 24px; height: 24px; }
+  .act.stop { background: rgba(255,90,106,.14); color: var(--red-text); border: 1px solid rgba(255,138,150,.5); box-shadow: none; }
+
+  /* nav */
+  nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid rgba(80,210,255,.14);
+    background: rgba(6,12,19,.95); padding: 4px 8px calc(10px + env(safe-area-inset-bottom)); }
+  nav button { border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 0; color: var(--muted); font-size: 12px; font-weight: 500; }
+  nav button span { display: grid; place-items: center; width: 56px; height: 30px; border-radius: 15px; }
+  nav button svg { width: 20px; height: 20px; }
+  nav button[aria-current="page"] { color: var(--cyan); font-weight: 600; }
+  nav button[aria-current="page"] span { background: rgba(70,220,255,.14); }
+
+  /* pages: memory + settings */
+  .page { flex: 1; overflow-y: auto; padding: 18px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+  .page h1 { margin: 0; font-family: var(--hud); font-weight: 600; font-size: 28px; letter-spacing: .02em; }
+  .page .sub { margin: -8px 0 0; color: var(--muted); font-size: 14px; }
+  .card { border-radius: 18px; border: 1px solid var(--line); background: var(--panel); padding: 14px; }
+  .card h2 { margin: 0 0 10px; font-family: var(--hud); font-weight: 600; font-size: 13px; letter-spacing: .22em;
+    color: var(--cyan); text-transform: uppercase; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; align-items: center; gap: 10px; min-height: 52px; border-bottom: 1px solid rgba(80,210,255,.1); }
+  .list li:last-child { border-bottom: 0; }
+  .list li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .list small { color: #7f9cae; font-family: var(--mono); font-size: 11px; }
+  .del { width: 44px; height: 44px; border: 0; background: none; color: var(--muted); border-radius: 12px; }
+  .empty { color: var(--muted); padding: 8px 0; }
+  .row { display: flex; align-items: center; gap: 12px; min-height: 52px; }
+  .row > span { flex: 1; }
+  .switch { width: 52px; height: 32px; border-radius: 16px; border: 1px solid var(--line); background: rgba(14,26,38,.9); position: relative; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: var(--muted); transition: transform .2s; }
+  .switch[aria-checked="true"] { background: rgba(70,220,255,.25); border-color: var(--cyan); }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); background: var(--cyan); }
+  .model { width: 100%; text-align: left; border: 0; background: none; display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0; }
+  .radio { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--muted); flex: none; display: grid; place-items: center; }
+  .model[aria-checked="true"] .radio { border-color: var(--cyan); }
+  .model[aria-checked="true"] .radio::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--cyan); }
+  .model b { font-weight: 600; } .model small { display: block; }
+  .suggest { display: flex; flex-direction: column; gap: 8px; }
+  .suggest button { text-align: left; border: 1px solid var(--line); background: rgba(4,7,12,.5); border-radius: 14px; padding: 10px 14px; min-height: 56px; }
+  .suggest button small { display: block; color: var(--muted); font-size: 12px; }
+  .progress { height: 8px; border-radius: 4px; background: rgba(80,210,255,.12); overflow: hidden; margin-top: 8px; }
+  .progress div { height: 100%; width: 0; background: var(--cyan); transition: width .3s; }
+  .pullmsg { font: 12px var(--mono); color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
+
+  /* voice overlay */
+  .voice { position: fixed; inset: 0; z-index: 20; display: none; flex-direction: column; align-items: center;
+    padding: calc(16px + env(safe-area-inset-top)) 24px calc(32px + env(safe-area-inset-bottom));
+    background: radial-gradient(ellipse at 50% 36%, rgba(255,90,106,.2), transparent 58%), var(--bg); }
+  .voice.on { display: flex; }
+  .voice .bar { align-self: stretch; display: flex; justify-content: flex-start; }
+  .voice .core { width: min(74vw, 300px); height: auto; margin-top: 7vh; }
+  .voice .status { font-size: 15px; letter-spacing: .4em; margin-top: 20px; }
+  .voice .said { margin: 24px 0 0; text-align: center; font-family: var(--hud); font-weight: 500; font-size: 26px; line-height: 1.25; min-height: 2.5em; }
+  .voice .spacer { flex: 1; }
+  .bigstop { width: 84px; height: 84px; border-radius: 50%; border: 2px solid var(--red-text); background: rgba(255,90,106,.14);
+    color: var(--red-text); display: grid; place-items: center; box-shadow: 0 0 34px rgba(255,90,106,.35); }
+  .voice .hint { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* permission sheet */
+  .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(2,5,9,.6); display: none; align-items: flex-end; }
+  .scrim.on { display: flex; }
+  .sheet { width: 100%; padding: 12px 20px calc(24px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0;
+    background: var(--sheet); border-top: 1px solid rgba(255,181,71,.45); display: flex; flex-direction: column; gap: 16px; }
+  .sheet .grab { align-self: center; width: 40px; height: 4px; border-radius: 2px; background: rgba(216,243,255,.25); }
+  .sheet h2 { margin: 0; font-family: var(--hud); font-weight: 600; font-size: 15px; letter-spacing: .26em; color: var(--amber); }
+  .sheet p { margin: 0; font-size: 17px; font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .btn { min-height: 54px; border-radius: 27px; border: 1px solid rgba(216,243,255,.25); background: transparent; font-weight: 600; }
+  .btn.primary { background: var(--amber); color: #2a1800; border: 0; }
+  .btn.cyan { background: var(--cyan); color: #03222b; border: 0; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body class="st-idle">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="core" viewBox="0 0 400 400">
+    <circle class="glow" cx="200" cy="200" r="74"></circle>
+    <circle class="r r1" cx="200" cy="200" r="186"></circle>
+    <circle class="r r2" cx="200" cy="200" r="160"></circle>
+    <circle class="r r3" cx="200" cy="200" r="134"></circle>
+    <circle class="r r4" cx="200" cy="200" r="104"></circle>
+    <circle class="r r5" cx="200" cy="200" r="66"></circle>
+    <path class="mark" d="M200 152 L242 232 L158 232 Z M178 208 H222"></path>
+  </symbol>
+</svg>
+
+<div class="app">
+  <!-- CHAT -->
+  <section class="view on" id="v-chat" aria-label="Chat">
+    <header class="chathead">
+      <svg class="core" aria-hidden="true"><use href="#core"></use></svg>
+      <div class="who"><div class="brand">ARIZE</div><div class="status" id="status2" aria-live="polite">Standing by</div></div>
+      <button class="icon-btn" id="newBtn" aria-label="New chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+    </header>
+    <div class="home" id="home">
+      <div class="top">
+        <div class="brand" style="color: var(--cyan); font-size: 18px">ARIZE</div>
+        <span class="model-line" id="modelLine"></span>
+      </div>
+      <svg class="core" viewBox="0 0 400 400" aria-hidden="true"><use href="#core"></use></svg>
+      <div class="status" id="status" role="status" style="font-size: 14px; letter-spacing: .36em">Starting</div>
+      <h1 id="hello">Hello.</h1>
+      <p>What can I do for you?</p>
+      <div class="chips" id="chips">
+        <button class="chip" data-q="What's in the news today?">Today's news</button>
+        <button class="chip" data-q="What do you remember about me?">What do you know about me?</button>
+        <button class="chip" data-q="How's my battery?" data-needs="phone_battery">My battery</button>
+      </div>
+    </div>
+    <div class="msgs" id="msgs" aria-live="polite"></div>
+    <form class="composer" id="composer">
+      <label class="field"><span class="sr">Message ARIZE</span>
+        <input id="input" type="text" autocomplete="off" enterkeyhint="send" placeholder="Message ARIZE…"></label>
+      <button class="act" id="actBtn" type="button" aria-label="Talk to ARIZE"></button>
+    </form>
+  </section>
+
+  <!-- MEMORY -->
+  <section class="view" id="v-memory" aria-label="Memory">
+    <div class="page">
+      <h1>Memory</h1>
+      <p class="sub">What ARIZE remembers about you. Tap ✕ to forget something.</p>
+      <div class="card"><ul class="list" id="memList"></ul></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view" id="v-settings" aria-label="Settings">
+    <div class="page">
+      <h1>Settings</h1>
+      <div class="card">
+        <h2>Voice</h2>
+        <div class="row"><span id="voiceLbl">Read answers out loud</span>
+          <button class="switch" id="voiceSw" role="switch" aria-checked="false" aria-labelledby="voiceLbl"></button></div>
+      </div>
+      <div class="card">
+        <h2>AI model</h2>
+        <div id="modelList"></div>
+        <p class="pullmsg" id="modelErr"></p>
+      </div>
+      <div class="card">
+        <h2>Download a model</h2>
+        <div class="suggest" id="suggest">
+          <button data-pull="qwen3:1.7b"><b>qwen3:1.7b</b> · 1.4 GB<small>Good balance. Works on most phones with 6 GB+ memory.</small></button>
+          <button data-pull="qwen3:4b"><b>qwen3:4b</b> · 2.5 GB<small>Smarter but slower. Needs a phone with 8 GB+ memory.</small></button>
+          <button data-pull="qwen3:0.6b"><b>qwen3:0.6b</b> · 0.5 GB<small>Fastest, but often gets things wrong.</small></button>
+        </div>
+        <div class="progress" id="pullBar" hidden><div></div></div>
+        <p class="pullmsg" id="pullMsg"></p>
+      </div>
+      <p class="model-line" id="about"></p>
+    </div>
+  </section>
+
+  <nav aria-label="Main">
+    <button data-view="chat" aria-current="page"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg></span>Chat</button>
+    <button data-view="memory"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2.4 4.8.9.9 1.6 2 1.6 3.2h4c0-1.2.7-2.3 1.6-3.2C16.8 12.6 18 11.2 18 9a6 6 0 0 0-6-6zM10 21h4"></path></svg></span>Memory</button>
+    <button data-view="settings"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"></path></svg></span>Settings</button>
+  </nav>
+</div>
+
+<!-- VOICE -->
+<div class="voice" id="voice" role="dialog" aria-modal="true" aria-label="Talking to ARIZE">
+  <div class="bar"><button class="icon-btn" id="voiceClose" aria-label="Close voice mode"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></div>
+  <svg class="core" viewBox="0 0 400 400" aria-hidden="true"><use href="#core"></use></svg>
+  <div class="status" id="vStatus">Listening</div>
+  <p class="said" id="said"></p>
+  <div class="spacer"></div>
+  <button class="bigstop" id="vStop" aria-label="Stop listening"><svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></button>
+  <p class="hint">Sends when you pause. Tap to stop.</p>
+</div>
+
+<!-- PERMISSION -->
+<div class="scrim" id="perm">
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="permTitle">
+    <div class="grab" aria-hidden="true"></div>
+    <h2 id="permTitle">PERMISSION NEEDED</h2>
+    <p id="permText"></p>
+    <div class="two"><button class="btn" id="deny">Deny</button><button class="btn primary" id="allow">Allow</button></div>
+  </section>
+</div>
+
+<script>
+const TOKEN = "__ARIZE_TOKEN__";
+const $ = (id) => document.getElementById(id);
+const ICON = {
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg>',
+};
+const LABELS = {
+  web_search: "Searching the web", read_webpage: "Reading a page", read_file: "Reading a file",
+  list_folder: "Looking at files", write_file: "Writing a file", run_command: "Running a command",
+  remember: "Saving a memory", search_memory: "Searching memory", forget: "Forgetting",
+  phone_battery: "Checking the battery", clipboard_read: "Reading the clipboard",
+  clipboard_write: "Copying to the clipboard", open_link: "Opening a link",
+  notify: "Sending a notification", vibrate: "Vibrating", flashlight: "Switching the flashlight",
+};
+let busy = false, voiceOn = false, tools = [];
+try { voiceOn = localStorage.getItem("arize-voice") === "1"; } catch {}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Arize-Token": TOKEN } });
+  if (res.status === 403) { location.reload(); throw new Error("ARIZE restarted, reloading"); }
+  return res;
+}
+function setState(state, text) {
+  document.body.className = "st-" + state;
+  $("status").textContent = text; $("status2").textContent = text;
+  if ($("voice").classList.contains("on")) $("vStatus").textContent = text;
+}
+
+// --- tiny safe markdown ---------------------------------------------------------
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const inline = (s) => s.replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+  .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+  .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+function md(src) {
+  return src.split(/```[\w-]*\n?/).map((part, i) => {
+    if (i % 2) return "<pre><code>" + esc(part.replace(/\n$/, "")) + "</code></pre>";
+    return part.split(/\n{2,}/).filter((b) => b.trim()).map((block) => {
+      const lines = block.split("\n").filter((l) => l.trim());
+      if (lines.every((l) => /^\s*[-*•]\s+/.test(l)))
+        return "<ul>" + lines.map((l) => "<li>" + inline(esc(l.replace(/^\s*[-*•]\s+/, ""))) + "</li>").join("") + "</ul>";
+      if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l)))
+        return "<ol>" + lines.map((l) => "<li>" + inline(esc(l.replace(/^\s*\d+[.)]\s+/, ""))) + "</li>").join("") + "</ol>";
+      return "<p>" + inline(esc(lines.map((l) => l.replace(/^#{1,6}\s+(.*)$/, "**$1**")).join("\n"))).replace(/\n/g, "<br>") + "</p>";
+    }).join("");
+  }).join("");
+}
+
+// --- conversation ---------------------------------------------------------------
+function startChatView() { document.querySelector(".app").classList.add("chatting"); }
+function scrollDown() { const m = $("msgs"); m.scrollTop = m.scrollHeight; }
+function addUser(text) {
+  const d = document.createElement("div"); d.className = "me"; d.textContent = text; $("msgs").appendChild(d);
+}
+function addBot() {
+  const art = document.createElement("article"); art.className = "bot";
+  art.innerHTML = '<div class="label">ARIZE</div><ul class="steps"></ul><div class="text cursor"></div>';
+  $("msgs").appendChild(art);
+  return { art, steps: art.querySelector(".steps"), text: art.querySelector(".text") };
+}
+function describe(json) {
+  try { const a = JSON.parse(json); const v = a.query || a.url || a.path || a.command || a.fact || a.title || a.text;
+    return v ? ": " + String(v).slice(0, 60) : ""; } catch { return ""; }
+}
+
+async function send(text) {
+  text = text.trim();
+  if (!text || busy) return;
+  stopSpeaking();
+  busy = true; $("input").value = ""; renderAct();
+  startChatView(); addUser(text);
+  const out = addBot(); scrollDown();
+  let answer = "", lastStep = null, willSpeak = false;
+  setState("thinking", "Thinking");
+  try {
+    const res = await api("/api/chat", { method: "POST", body: JSON.stringify({ message: text }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Error " + res.status);
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "token") {
+          if (!answer) setState("thinking", "Responding");
+          answer += ev.text; out.text.innerHTML = md(answer); scrollDown();
+        } else if (ev.type === "tool") {
+          answer = ""; out.text.innerHTML = "";
+          const label = LABELS[ev.name] || ev.name;
+          setState("tool", label);
+          lastStep = document.createElement("li");
+          lastStep.innerHTML = '<span class="run">▸</span><span></span>';
+          lastStep.lastChild.textContent = label + describe(ev.args);
+          out.steps.appendChild(lastStep); out.steps.classList.add("has"); scrollDown();
+        } else if (ev.type === "result") {
+          if (lastStep) { const m = lastStep.firstChild; m.className = ev.ok ? "ok" : "bad"; m.textContent = ev.ok ? "✓" : "✗"; }
+          setState("thinking", "Thinking");
+        } else if (ev.type === "confirm") {
+          setState("tool", "Waiting for you"); askPermission(ev.id, ev.text);
+        } else if (ev.type === "done") {
+          answer = ev.text || answer; out.text.innerHTML = md(answer);
+        } else if (ev.type === "error") throw new Error(ev.text);
+      }
+    }
+    out.text.classList.remove("cursor");
+    willSpeak = voiceOn && !!answer;
+    if (willSpeak) speak(answer); else setState("idle", "Standing by");
+  } catch (err) {
+    out.text.classList.remove("cursor"); out.art.classList.add("error");
+    out.text.textContent = String(err.message || err);
+    setState("idle", "Standing by");
+  } finally {
+    busy = false; renderAct(); scrollDown();
+    if ($("voice").classList.contains("on") && !willSpeak) closeVoice();
+  }
+}
+
+// --- the round button: talk / send / stop ----------------------------------------
+function renderAct() {
+  const b = $("actBtn"), typed = $("input").value.trim();
+  const mode = busy ? "stop" : typed ? "send" : "mic";
+  b.dataset.mode = mode; b.innerHTML = ICON[mode]; b.classList.toggle("stop", mode === "stop");
+  b.setAttribute("aria-label", { stop: "Stop ARIZE", send: "Send", mic: "Talk to ARIZE" }[mode]);
+}
+$("actBtn").onclick = () => {
+  const mode = $("actBtn").dataset.mode;
+  if (mode === "stop") { api("/api/stop", { method: "POST" }); setState("idle", "Stopping"); }
+  else if (mode === "send") send($("input").value);
+  else openVoice();
+};
+$("composer").onsubmit = (e) => { e.preventDefault(); send($("input").value); };
+$("input").oninput = renderAct;
+
+// --- permission sheet -------------------------------------------------------------
+function askPermission(id, text) {
+  $("permText").textContent = text; $("perm").classList.add("on"); $("allow").focus();
+  const answer = (allow) => {
+    $("perm").classList.remove("on"); $("allow").onclick = $("deny").onclick = null;
+    setState("thinking", "Thinking");
+    api("/api/confirm", { method: "POST", body: JSON.stringify({ id, allow }) });
+  };
+  $("allow").onclick = () => answer(true); $("deny").onclick = () => answer(false);
+}
+
+// --- voice ------------------------------------------------------------------------
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function openVoice() {
+  if (!Rec) { alert("Voice input needs Chrome."); return; }
+  stopSpeaking();
+  $("voice").classList.add("on"); $("said").textContent = "";
+  rec = new Rec(); rec.lang = navigator.language || "en-US"; rec.interimResults = true;
+  let final = "";
+  rec.onstart = () => setState("listening", "Listening");
+  rec.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) final += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+    }
+    $("said").textContent = "“" + (final + interim).trim() + "”";
+  };
+  rec.onerror = (e) => { if (e.error !== "aborted") $("said").textContent = "Couldn't hear you (" + e.error + ")"; };
+  rec.onend = () => {
+    rec = null;
+    if (final.trim()) { setState("thinking", "Thinking"); send(final); }
+    else { setState("idle", "Standing by"); setTimeout(closeVoice, 900); }
+  };
+  rec.start();
+}
+function closeVoice() { if (rec) rec.abort(); $("voice").classList.remove("on"); stopSpeaking(); if (!busy) setState("idle", "Standing by"); }
+$("vStop").onclick = () => { if (rec) rec.stop(); else if (busy) { api("/api/stop", { method: "POST" }); } else closeVoice(); };
+$("voiceClose").onclick = closeVoice;
+
+let voice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices();
+  return vs.find((v) => /en-GB/i.test(v.lang)) || vs.find((v) => /^en/i.test(v.lang)) || vs[0] || null;
+}
+if ("speechSynthesis" in window) { speechSynthesis.onvoiceschanged = () => { voice = pickVoice(); }; voice = pickVoice(); }
+function speak(text) {
+  if (!("speechSynthesis" in window)) return setState("idle", "Standing by");
+  const u = new SpeechSynthesisUtterance(text.replace(/```[\s\S]*?```/g, " ").replace(/https?:\/\/\S+/g, " link ").replace(/[*_`#>\[\]()]/g, ""));
+  if (voice) u.voice = voice;
+  u.onstart = () => setState("speaking", "Speaking");
+  u.onend = u.onerror = () => { if (!busy) setState("idle", "Standing by"); if ($("voice").classList.contains("on")) closeVoice(); };
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+function stopSpeaking() { if ("speechSynthesis" in window) speechSynthesis.cancel(); }
+
+// --- tabs ---------------------------------------------------------------------------
+document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach((x) => x.removeAttribute("aria-current"));
+  b.setAttribute("aria-current", "page");
+  document.querySelectorAll(".view").forEach((v) => v.classList.remove("on"));
+  $("v-" + b.dataset.view).classList.add("on");
+  if (b.dataset.view === "memory") loadMemories();
+  if (b.dataset.view === "settings") loadModels();
+});
+
+async function loadMemories() {
+  const list = $("memList"); list.innerHTML = "";
+  const mems = await (await api("/api/memories")).json();
+  if (!mems.length) { list.innerHTML = '<li class="empty">Nothing yet. Tell ARIZE about yourself and it will remember.</li>'; return; }
+  for (const m of mems) {
+    const li = document.createElement("li");
+    li.innerHTML = '<span></span><button class="del">✕</button>';
+    li.firstChild.textContent = m.text;
+    li.lastChild.setAttribute("aria-label", "Forget: " + m.text);
+    li.lastChild.onclick = async () => { await api("/api/memories/delete", { method: "POST", body: JSON.stringify({ id: m.id }) }); li.remove(); };
+    list.appendChild(li);
+  }
+}
+
+async function loadModels() {
+  const box = $("modelList"); box.innerHTML = "";
+  const data = await (await api("/api/models")).json();
+  $("modelErr").textContent = data.error ? "Can't reach Ollama: " + data.error : "";
+  if (!data.installed.length) box.innerHTML = '<p class="empty">No models downloaded yet. Pick one below.</p>';
+  for (const m of data.installed) {
+    const b = document.createElement("button");
+    b.className = "model"; b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(m.name === data.current));
+    b.innerHTML = '<span class="radio"></span><span><b></b><small></small></span>';
+    b.querySelector("b").textContent = m.name;
+    b.querySelector("small").textContent = m.size_gb + " GB";
+    b.onclick = async () => {
+      await api("/api/models/select", { method: "POST", body: JSON.stringify({ name: m.name }) });
+      $("modelLine").textContent = m.name; loadModels();
+    };
+    box.appendChild(b);
+  }
+}
+
+document.querySelectorAll("[data-pull]").forEach((b) => b.onclick = async () => {
+  const name = b.dataset.pull;
+  if (!confirm("Download " + name + "? Use Wi-Fi: it's a big download.")) return;
+  const bar = $("pullBar"), fill = bar.firstChild;
+  bar.hidden = false; fill.style.width = "0"; $("pullMsg").textContent = "Starting download…";
+  document.querySelectorAll("[data-pull]").forEach((x) => (x.disabled = true));
+  try {
+    const res = await api("/api/models/pull", { method: "POST", body: JSON.stringify({ name }) });
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true }); let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const ev = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);
+        if (ev.error) throw new Error(ev.error);
+        if (ev.total && ev.completed) {
+          const pct = Math.round((ev.completed / ev.total) * 100);
+          fill.style.width = pct + "%"; $("pullMsg").textContent = `Downloading ${name}: ${pct}%`;
+        } else if (ev.status) $("pullMsg").textContent = ev.status;
+      }
+    }
+    fill.style.width = "100%"; $("pullMsg").textContent = name + " is ready. Select it above to use it.";
+    loadModels();
+  } catch (err) { $("pullMsg").textContent = "Download failed: " + (err.message || err); }
+  finally { document.querySelectorAll("[data-pull]").forEach((x) => (x.disabled = false)); }
+});
+
+$("voiceSw").onclick = () => {
+  voiceOn = !voiceOn; $("voiceSw").setAttribute("aria-checked", String(voiceOn));
+  try { localStorage.setItem("arize-voice", voiceOn ? "1" : "0"); } catch {}
+  if (!voiceOn) stopSpeaking();
+};
+$("newBtn").onclick = async () => {
+  if (busy) return;
+  stopSpeaking(); await api("/api/new", { method: "POST" });
+  $("msgs").innerHTML = ""; document.querySelector(".app").classList.remove("chatting");
+};
+document.querySelectorAll("[data-q]").forEach((b) => b.onclick = () => send(b.dataset.q));
+
+// --- start ------------------------------------------------------------------------
+(async function init() {
+  renderAct();
+  $("voiceSw").setAttribute("aria-checked", String(voiceOn));
+  const h = new Date().getHours();
+  $("hello").textContent = h < 5 ? "Up late?" : h < 12 ? "Good morning." : h < 18 ? "Good afternoon." : "Good evening.";
+  try {
+    const info = await (await api("/api/info")).json();
+    tools = info.tools || [];
+    $("modelLine").textContent = info.model;
+    $("about").textContent = "ARIZE v" + info.version + " · running on this phone";
+    document.querySelectorAll("[data-needs]").forEach((b) => { if (!tools.includes(b.dataset.needs)) b.remove(); });
+    setState("idle", "Standing by");
+  } catch { setState("idle", "Offline"); }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+})();
+</script>
+</body>
+</html>

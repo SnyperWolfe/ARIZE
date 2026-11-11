@@ -1,4 +1,4 @@
-"""The local web server behind the ARIZE desktop window.
+"""The local web server behind the ARIZE desktop window and the phone app.
 
 It only listens on 127.0.0.1, only answers requests addressed to that host, and every
 API call must carry a secret token that is written into the page it serves. Other
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import secrets
 import threading
 import time
@@ -16,25 +17,38 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from itertools import count
 
+import httpx
+
 from . import __version__
 from .agent import Agent
-from .config import Config
+from .config import Config, save_setting
 from .llm import ChatModel, LLMError, make_model
 from .memory import MemoryStore
-from .tools import default_registry, make_context
+from .tools import default_registry, make_context, mobile_registry
 
 CONFIRM_TIMEOUT = 300  # seconds to wait for Allow / Deny before treating it as Deny
 STATIC = {
     "/icon.png": ("arize.png", "image/png"),
     "/favicon.ico": ("arize.ico", "image/x-icon"),
+    "/icon-192.png": ("icon-192.png", "image/png"),
+    "/icon-512.png": ("icon-512.png", "image/png"),
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+    "/sw.js": ("sw.js", "text/javascript"),
 }
+MODEL_NAME = re.compile(r"^[A-Za-z0-9._:/-]{1,100}$")
+CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+    "manifest-src 'self'; worker-src 'self'"
+)
 
 
 class ArizeApp:
     """Shared state: one assistant, one conversation at a time."""
 
-    def __init__(self, cfg: Config, model: ChatModel | None = None):
+    def __init__(self, cfg: Config, model: ChatModel | None = None, mobile: bool = False):
         self.cfg = cfg
+        self.mobile = mobile
         self.token = secrets.token_urlsafe(24)
         self.memory = MemoryStore(cfg.memory_path)
         model = model or make_model(cfg)
@@ -43,7 +57,7 @@ class ArizeApp:
         ctx = make_context(cfg, self.memory, self._confirm, vision=vision)
         self.agent = Agent(
             model,
-            default_registry(ctx),
+            (mobile_registry if mobile else default_registry)(ctx),
             self.memory,
             cfg.max_steps,
             on_event=self._on_event,
@@ -78,6 +92,45 @@ class ArizeApp:
         return waiter[1]
 
     # --- called from request handlers ---------------------------------------
+
+    def stop(self) -> None:
+        """The Stop button: stop at the next safe point and deny anything waiting."""
+        self.agent.stop()
+        for waiter in list(self._pending.values()):
+            waiter[1] = False
+            waiter[0].set()
+
+    # --- models (Ollama only) -----------------------------------------------
+
+    def _ollama(self) -> httpx.Client:
+        root = self.cfg.base_url.rstrip("/").removesuffix("/v1")
+        return httpx.Client(base_url=root, timeout=httpx.Timeout(30, read=None))
+
+    def models(self) -> dict:
+        try:
+            with self._ollama() as client:
+                tags = client.get("/api/tags").json().get("models", [])
+        except (httpx.HTTPError, ValueError) as exc:
+            return {"current": self.cfg.model, "installed": [], "error": str(exc)}
+        installed = [{"name": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)} for m in tags]
+        return {"current": self.cfg.model, "installed": installed}
+
+    def select_model(self, name: str) -> None:
+        self.cfg.model = name
+        self.agent.model.model = name
+        save_setting("model", name, self.cfg.home / "config.toml")
+
+    def pull_model(self, name: str):
+        """Download a model with Ollama, yielding progress events."""
+        with self._ollama() as client:
+            with client.stream("POST", "/api/pull", json={"model": name}) as resp:
+                if resp.status_code >= 400:
+                    resp.read()
+                    yield {"error": resp.text[:300]}
+                    return
+                for line in resp.iter_lines():
+                    if line.strip():
+                        yield json.loads(line)
 
     def answer_confirm(self, cid: str, allow: bool) -> bool:
         waiter = self._pending.get(cid)
@@ -164,13 +217,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, b"Forbidden", "text/plain")
         path = self.path.split("?")[0]
         if path == "/":
-            page = _static("index.html").decode().replace("__ARIZE_TOKEN__", self.app.token)
-            csp = (
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
-            )
+            name = "mobile.html" if self.app.mobile else "index.html"
+            page = _static(name).decode().replace("__ARIZE_TOKEN__", self.app.token)
             return self._send(
-                200, page.encode(), "text/html; charset=utf-8", {"Content-Security-Policy": csp}
+                200, page.encode(), "text/html; charset=utf-8", {"Content-Security-Policy": CSP}
             )
         if path in STATIC:
             name, ctype = STATIC[path]
@@ -184,7 +234,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         if path == "/api/info":
             cfg = self.app.cfg
-            return self._json({"version": __version__, "model": cfg.model, "think": cfg.think})
+            tools = sorted(self.app.agent.tools.tools)
+            return self._json(
+                {"version": __version__, "model": cfg.model, "think": cfg.think, "tools": tools}
+            )
+        if path == "/api/models":
+            return self._json(self.app.models())
         if path == "/api/memories":
             mems = self.app.memory.all()
             return self._json([{"id": m.id, "text": m.text, "created": m.created} for m in mems])
@@ -204,6 +259,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/confirm":
             ok = self.app.answer_confirm(str(body.get("id")), bool(body.get("allow")))
             return self._json({"ok": ok})
+        if path == "/api/stop":
+            self.app.stop()
+            return self._json({"ok": True})
+        if path == "/api/models/select":
+            name = str(body.get("name", ""))
+            if not MODEL_NAME.match(name):
+                return self._json({"error": "bad model name"}, 400)
+            self.app.select_model(name)
+            return self._json({"ok": True, "model": name})
+        if path == "/api/models/pull":
+            name = str(body.get("name", ""))
+            if not MODEL_NAME.match(name):
+                return self._json({"error": "bad model name"}, 400)
+            return self._stream(self.app.pull_model(name))
         if path == "/api/new":
             with self.app.busy:
                 self.app.agent.reset()
@@ -214,6 +283,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/memories/delete":
             return self._json({"ok": self.app.memory.forget(int(body.get("id", 0)))})
         self._send(404, b"Not found", "text/plain")
+
+    def _stream(self, events) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            for event in events:
+                self.wfile.write((json.dumps(event) + "\n").encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except httpx.HTTPError as exc:
+            self.wfile.write((json.dumps({"error": str(exc)}) + "\n").encode())
+        self.close_connection = True
 
     def _chat(self, message: str) -> None:
         if not message:

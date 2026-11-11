@@ -770,3 +770,187 @@ def test_new_version_replaces_old_running_app(tmp_path, monkeypatch):
     assert desktop._stop_old(cfg, port)
     t.join(timeout=5)
     assert not t.is_alive() and desktop._running_version(port) is None
+
+
+# --- phone edition ------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_termux(tmp_path, monkeypatch):
+    """Stand-in termux-* commands that log their calls."""
+    import sys
+
+    bindir = tmp_path / "termux-bin"
+    bindir.mkdir()
+    log = tmp_path / "termux.log"
+    outputs = {
+        "termux-battery-status": '{"percentage": 76, "plugged": "PLUGGED_AC", '
+        '"health": "GOOD", "temperature": 31.2}',
+        "termux-clipboard-get": "copied text",
+    }
+    for name in [
+        "termux-battery-status", "termux-clipboard-get", "termux-clipboard-set",
+        "termux-open-url", "termux-notification", "termux-vibrate", "termux-torch",
+    ]:  # fmt: skip
+        script = bindir / name
+        script.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            f"open({str(log)!r}, 'a').write(' '.join([{name!r}] + sys.argv[1:]) "
+            "+ ' | ' + (sys.stdin.read() if not sys.stdin.isatty() else '') + '\\n')\n"
+            f"print({outputs.get(name, '')!r})\n"
+        )
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{__import__('os').environ['PATH']}")
+    return log
+
+
+def test_mobile_registry_has_phone_tools_not_desktop_ones(make_ctx, fake_termux):
+    from arize_assistant.tools import mobile_registry
+
+    names = set(mobile_registry(make_ctx()).tools)
+    assert {"web_search", "remember", "read_file", "phone_battery", "flashlight"} <= names
+    assert not names & {"godot_run", "click", "look_at_screen"}
+
+
+def test_mobile_registry_without_termux_api(make_ctx, monkeypatch):
+    from arize_assistant.tools import mobile_registry, phone
+
+    monkeypatch.setattr(phone, "available", lambda: False)
+    assert "phone_battery" not in mobile_registry(make_ctx()).tools
+
+
+def test_phone_tools(make_ctx, fake_termux):
+    from arize_assistant.tools import mobile_registry
+
+    reg = mobile_registry(make_ctx())
+
+    def run(tool, **a):
+        return reg.call(tool, json.dumps(a))
+
+    assert run("phone_battery") == "Battery 76%, charging (plugged_ac), health good, 31 °C"
+    assert run("clipboard_read") == "copied text"
+    assert "Copied 5" in run("clipboard_write", text="hello")
+    assert run("open_link", url="https://example.com") == "Opened https://example.com"
+    assert "Only http" in run("open_link", url="file:///etc/passwd")
+    run("notify", title="Hi", text="there")
+    run("vibrate", milliseconds=99999)
+    run("flashlight", on=True)
+    calls = fake_termux.read_text()
+    assert "termux-clipboard-set | hello" in calls
+    assert "termux-notification --title Hi --content there --id arize" in calls
+    assert "termux-vibrate -d 5000 -f" in calls and "termux-torch on" in calls
+
+
+def test_prompt_sections_follow_tools(make_ctx, memory, fake_termux):
+    from arize_assistant.tools import mobile_registry
+
+    desktop = Agent(ScriptedModel([]), default_registry(make_ctx()), memory)
+    phone = Agent(ScriptedModel([]), mobile_registry(make_ctx()), memory)
+    d, p = desktop.system_prompt("hi"), phone.system_prompt("hi")
+    assert "Godot 4" in d and "look_at_screen" in d and "Android" not in d
+    assert "Godot" not in p and "look_at_screen" not in p
+    assert "Android phone" in p and "user's own phone" in p
+    assert len(p) < len(d) - 800  # saves the small model's memory
+
+
+def test_stop_between_tool_steps(make_ctx, memory):
+    from arize_assistant.agent import STOPPED_ANSWER
+
+    model = ScriptedModel([Reply("", [call("list_folder"), call("list_folder")])])
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    agent.on_event = lambda kind, *_: agent.stop() if kind == "result" else None
+    assert agent.ask("look around") == STOPPED_ANSWER
+    tool_msgs = [m for m in agent.history if m["role"] == "tool"]
+    assert len(tool_msgs) == 2 and "stop" in tool_msgs[1]["content"]  # every call answered
+    assert agent.history[-1]["content"] == STOPPED_ANSWER
+    model.replies.append(Reply("fine"))
+    assert agent.ask("ok") == "fine"  # stop doesn't stick to the next message
+
+
+def test_stop_cuts_off_streaming(make_ctx, memory):
+    from arize_assistant.agent import STOPPED_ANSWER
+
+    model = ScriptedModel([Reply("a long answer that keeps going and going")])
+    agent = Agent(model, default_registry(make_ctx()), memory)
+    pieces = []
+
+    def on_token(t):
+        pieces.append(t)
+        agent.stop()
+
+    assert agent.ask("talk", on_token=on_token) == STOPPED_ANSWER
+    assert len(pieces) == 1
+
+
+@pytest.fixture
+def mobile_server(tmp_path, monkeypatch, fake_termux):
+    import threading
+
+    from arize_assistant.config import write_default_config
+    from arize_assistant.server import ArizeApp, make_server
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path / "home"))
+    write_default_config(mobile=True)
+    cfg = Config.load()
+    app = ArizeApp(cfg, model=ScriptedModel([]), mobile=True)
+    pulled = []
+
+    def fake_ollama(request):
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [
+                {"name": "qwen3:1.7b", "size": 1_400_000_000},
+                {"name": "qwen3:4b", "size": 2_500_000_000}]})  # fmt: skip
+        if request.url.path == "/api/pull":
+            pulled.append(json.loads(request.content)["model"])
+            lines = [{"status": "pulling manifest"},
+                     {"status": "downloading", "total": 100, "completed": 50},
+                     {"status": "success"}]  # fmt: skip
+            return httpx.Response(200, text="\n".join(json.dumps(x) for x in lines))
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        app,
+        "_ollama",
+        lambda: httpx.Client(base_url="http://o", transport=httpx.MockTransport(fake_ollama)),
+    )
+    server = make_server(app, 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    client = httpx.Client(base_url=base, headers={"X-Arize-Token": app.token}, timeout=10)
+    yield app, client, pulled, tmp_path / "home"
+    server.shutdown()
+
+
+def test_mobile_server(mobile_server):
+    app, client, pulled, home = mobile_server
+    page = client.get("/").text
+    assert "manifest.webmanifest" in page and app.token in page and "Voice" in page
+    for path in ["/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png"]:
+        assert client.get(path).status_code == 200
+    assert json.loads(client.get("/manifest.webmanifest").text)["display"] == "standalone"
+    info = client.get("/api/info").json()
+    assert info["model"] == "qwen3:1.7b" and "phone_battery" in info["tools"]
+    assert "godot_run" not in info["tools"]
+
+    models = client.get("/api/models").json()
+    assert models["current"] == "qwen3:1.7b" and models["installed"][1]["size_gb"] == 2.5
+    assert client.post("/api/models/select", json={"name": "qwen3:4b"}).json()["ok"]
+    assert app.agent.model.model == "qwen3:4b"
+    assert 'model = "qwen3:4b"' in (home / "config.toml").read_text()
+    assert client.post("/api/models/select", json={"name": "bad name; rm"}).status_code == 400
+
+    events = [
+        json.loads(x)
+        for x in client.post("/api/models/pull", json={"name": "qwen3:0.6b"}).text.splitlines()
+    ]
+    assert pulled == ["qwen3:0.6b"] and events[-1]["status"] == "success"
+    assert client.post("/api/stop").json()["ok"]
+
+
+def test_mobile_config_defaults(tmp_path):
+    from arize_assistant.config import write_default_config
+
+    path = write_default_config(tmp_path / "c.toml", mobile=True)
+    cfg = Config.load(path)
+    assert (cfg.model, cfg.context_length, cfg.max_steps) == ("qwen3:1.7b", 8192, 12)

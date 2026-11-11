@@ -6,6 +6,7 @@ Environment variables win over the file, and the file wins over the defaults.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -108,10 +109,47 @@ def _coerce(value, kind):
     return kind(value)
 
 
-def write_default_config(path: Path | None = None, force: bool = False) -> Path:
+# Phone edition: a small model that fits in a phone's memory, a shorter context, and
+# the phone's shared storage (Downloads, Documents, ...) as the workspace.
+MOBILE_OVERRIDES = {
+    "model": '"qwen3:1.7b"',
+    "context_length": "8192",
+    "max_steps": "12",
+    "workspace": '"~/storage/shared"',
+}
+
+
+def write_default_config(
+    path: Path | None = None, force: bool = False, mobile: bool = False
+) -> Path:
     path = path or home_dir() / "config.toml"
     if path.exists() and not force:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    text = DEFAULT_CONFIG
+    if mobile:
+        for key, value in MOBILE_OVERRIDES.items():
+            text = re.sub(rf"(?m)^{key} = .*$", f"{key} = {value}", text)
+        if not Path("~/storage/shared").expanduser().is_dir():
+            text = re.sub(r"(?m)^workspace = .*$", 'workspace = "~"', text)
+    path.write_text(text, encoding="utf-8")
     return path
+
+
+def save_setting(key: str, value, path: Path | None = None) -> None:
+    """Change one setting in the settings file, keeping everything else as it is."""
+    path = path or home_dir() / "config.toml"
+    if isinstance(value, bool):
+        literal = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        literal = str(value)
+    else:
+        literal = '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    line = f"{key} = {literal}"
+    if re.search(rf"(?m)^{re.escape(key)}\s*=", text):
+        text = re.sub(rf"(?m)^{re.escape(key)}\s*=.*$", lambda _: line, text)
+    else:
+        text = text.rstrip("\n") + f"\n{line}\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")

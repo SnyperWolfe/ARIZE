@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Callable
 from datetime import datetime
 
@@ -12,7 +13,7 @@ from .memory import MemoryStore
 from .tools import ToolRegistry
 
 SYSTEM_PROMPT = """\
-You are ARIZE, a private AI assistant running on the user's own computer.
+You are ARIZE, a private AI assistant running on the user's own {device}.
 Be direct, warm and concise. Today is {today}. The user's workspace folder is {workspace}.
 
 You can use tools to search the web, read web pages, read and write files, run
@@ -22,7 +23,12 @@ answer than guessing; never invent search results, file contents or command outp
 Memory: when the user tells you something worth knowing later (their name, preferences,
 people, projects, plans), save it with `remember` without being asked. If a saved memory
 turns out to be wrong or the user asks you to forget it, use `forget`.
+{sections}{memories}"""
 
+# Extra instructions, included only when their tools are available (saves the model's
+# limited memory on phones, which have neither Godot nor screen control).
+SECTIONS = {
+    "godot_run": """
 Godot: the user makes games in Godot 4 with GDScript. Always write Godot 4 code, never
 Godot 3: `extends CharacterBody2D`, `@export var speed := 200.0`, `@onready var sprite =
 $Sprite2D`, set `velocity` then call `move_and_slide()` with no arguments,
@@ -37,12 +43,19 @@ it works. Keep .tscn files simple, or build nodes in code inside `_ready()`. A m
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1")
-
+""",
+    "look_at_screen": """
 Screen control: use `look_at_screen` to see, then act with `click`, `press_keys`,
 `hold_keys`, `type_text` using the (x, y) 0-1000 positions it gives you. Use
 `focus_window` to bring a program forward first. Work in small steps and look again
 after each action to check it worked. If the user takes back control, stop.
-{memories}"""
+""",
+    "phone_battery": """
+Phone: you run on the user's Android phone. You can check the battery, read and set the
+clipboard, open links and apps' web pages, show notifications, vibrate, and switch the
+flashlight. Keep answers short: they're read on a small screen or spoken aloud.
+""",
+}
 
 EMPTY_NOTE = (
     "Your last reply was empty. Reply to the user now in plain words: what you did, "
@@ -53,6 +66,7 @@ STEPS_NOTE = (
     "in plain words what you've done so far and what's left, and that they can say "
     "'continue' to keep going."
 )
+STOPPED_ANSWER = "Stopped. What would you like me to do instead?"
 EMPTY_ANSWER = (
     "I didn't get an answer back from the model. This usually means the conversation got "
     "too long for it to remember. Click **New chat** and ask again, or raise "
@@ -134,6 +148,11 @@ class Agent:
         self.on_event = on_event or (lambda *_: None)
         self.think = think
         self.history: list[dict] = []
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        """Ask the current answer to stop at the next safe point."""
+        self._stop.set()
 
     def system_prompt(self, message: str) -> str:
         found = self.memory.context_for(message)
@@ -142,9 +161,12 @@ class Agent:
             memories = f"\nThings you remember about the user:\n{lines}\n"
         else:
             memories = "\nYou don't have any saved memories yet.\n"
+        sections = "".join(text for tool, text in SECTIONS.items() if tool in self.tools.tools)
         prompt = SYSTEM_PROMPT.format(
+            device="phone" if "phone_battery" in self.tools.tools else "computer",
             today=datetime.now().strftime("%A, %B %d, %Y"),
             workspace=self.tools.ctx.workspace,
+            sections=sections,
             memories=memories,
         )
         # Ollama's own API switches thinking off directly; other servers need the hint.
@@ -157,28 +179,41 @@ class Agent:
 
     def ask(self, message: str, on_token: TokenHook | None = None) -> str:
         """Answer ``message``. With ``on_token``, the answer is also streamed piece by piece."""
+        self._stop.clear()
         self.history.append({"role": "user", "content": message})
         system = {"role": "system", "content": self.system_prompt(message)}
         schemas = self.tools.schemas()
-        for _ in range(self.max_steps):
-            reply = self._chat([system, *self.history], schemas, on_token)
-            if not reply.tool_calls:
-                text = strip_thinking(reply.content)
-                if text:
-                    self.history.append(reply.as_message())
-                    return text
-                log.warning("Model gave an empty reply; asking it to answer")
-                return self._final(system, on_token, EMPTY_NOTE)
-            self.history.append(reply.as_message())
-            for call in reply.tool_calls:
-                self.on_event("tool", call.name, call.arguments)
-                output = self.tools.call(call.name, call.arguments)
-                self.on_event("result", call.name, output)
-                self.history.append(
-                    {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": output}
-                )
-        log.info("Used all %s tool steps", self.max_steps)
-        return self._final(system, on_token, STEPS_NOTE.format(n=self.max_steps))
+        try:
+            for _ in range(self.max_steps):
+                self._check_stop()
+                reply = self._chat([system, *self.history], schemas, on_token)
+                if not reply.tool_calls:
+                    text = strip_thinking(reply.content)
+                    if text:
+                        self.history.append(reply.as_message())
+                        return text
+                    log.warning("Model gave an empty reply; asking it to answer")
+                    return self._final(system, on_token, EMPTY_NOTE)
+                self.history.append(reply.as_message())
+                for i, call in enumerate(reply.tool_calls):
+                    if self._stop.is_set():
+                        # Every tool call needs an answer, or the model gets confused later.
+                        for skipped in reply.tool_calls[i:]:
+                            self.history.append(_tool_msg(skipped, "Skipped: the user said stop."))
+                        raise Stopped
+                    self.on_event("tool", call.name, call.arguments)
+                    output = self.tools.call(call.name, call.arguments)
+                    self.on_event("result", call.name, output)
+                    self.history.append(_tool_msg(call, output))
+            log.info("Used all %s tool steps", self.max_steps)
+            return self._final(system, on_token, STEPS_NOTE.format(n=self.max_steps))
+        except Stopped:
+            self.history.append({"role": "assistant", "content": STOPPED_ANSWER})
+            return STOPPED_ANSWER
+
+    def _check_stop(self) -> None:
+        if self._stop.is_set():
+            raise Stopped
 
     def _final(self, system: dict, on_token: TokenHook | None, note: str) -> str:
         """Ask for a plain answer without tools. The note itself isn't kept in history."""
@@ -194,4 +229,17 @@ class Agent:
     def _chat(self, messages, tools, on_token):
         if on_token is None:
             return self.model.chat(messages, tools)
-        return self.model.chat(messages, tools, ThinkFilter(on_token))
+
+        def guarded(piece: str) -> None:
+            self._check_stop()  # raising here also cuts off the model mid-answer
+            on_token(piece)
+
+        return self.model.chat(messages, tools, ThinkFilter(guarded))
+
+
+class Stopped(Exception):
+    """The user pressed Stop."""
+
+
+def _tool_msg(call, content: str) -> dict:
+    return {"role": "tool", "tool_call_id": call.id, "name": call.name, "content": content}

@@ -61,6 +61,36 @@ it. ARIZE shuts down on its own about a minute after you close the window.
 
 ![ARIZE desktop app](docs/screenshot.png)
 
+## Phone edition (Android)
+
+A separate ARIZE that runs entirely on your Android phone, with no computer needed. A
+small AI model runs on the phone itself through Ollama inside the free **Termux** app.
+It's private and free, but slower and less smart than ARIZE on a PC.
+
+![ARIZE on a phone](docs/phone.png)
+
+It has chat, voice (talk to it, and it can read answers out loud), memory, web search,
+your phone's files, a **Stop** button, a model manager in Settings, and phone tools:
+battery, clipboard, opening links, notifications, vibration and the flashlight.
+
+**Install:**
+
+1. Install **F-Droid** from https://f-droid.org, then in F-Droid install **Termux**,
+   **Termux:API** and **Termux:Widget**. (The Termux in the Play Store is outdated:
+   use F-Droid.)
+2. Open Termux and run:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/SnyperWolfe/ARIZE/main/mobile/install-termux.sh | bash
+   ```
+
+3. Add the **Termux:Widget** widget to your home screen and tap **ARIZE** in it.
+   Chrome opens ARIZE. To get an app icon too, tap Chrome's ⋮ menu, then
+   **Add to home screen**, then **Install**.
+
+Run the same install command again to update. The **Stop ARIZE** entry in the widget
+shuts it down to save battery. Settings live in `~/.arize/config.toml` inside Termux.
+
 ## Building games in Godot
 
 ARIZE can build and fix Godot 4 games with you. Ask things like:
