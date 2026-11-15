@@ -6,6 +6,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from ..memory import MemoryStore
@@ -30,6 +31,12 @@ class ToolContext:
     memory: MemoryStore
     confirm: Confirm
     confirm_actions: bool = True
+    # What confirm_actions goes back to when unrestricted mode is switched off.
+    confirm_default: bool = True
+    # False in unrestricted mode: any folder on the computer, not just the workspace.
+    restrict_paths: bool = True
+    # Every tool call is written here, so the user can see what ARIZE did.
+    action_log: Path | None = None
     vision: Vision | None = None
     godot_path: str = ""
     control_minutes: float = 10.0
@@ -75,7 +82,7 @@ class ToolContext:
         if not p.is_absolute():
             p = self.workspace / p
         p = p.resolve()
-        if p != self.workspace and self.workspace not in p.parents:
+        if self.restrict_paths and p != self.workspace and self.workspace not in p.parents:
             raise ToolError(f"{path} is outside the allowed folder {self.workspace}")
         return p
 
@@ -112,6 +119,24 @@ class ToolRegistry:
         return [t.schema() for t in self.tools.values()]
 
     def call(self, name: str, arguments: str) -> str:
+        out = self._call(name, arguments)
+        self._log(name, arguments, out)
+        return out
+
+    def _log(self, name: str, arguments: str, out: str) -> None:
+        if self.ctx.action_log is None:
+            return
+        stamp = datetime.now().isoformat(timespec="seconds")
+        args = " ".join((arguments or "{}").split())[:300]
+        result = (out.splitlines() or [""])[0][:200]
+        try:
+            self.ctx.action_log.parent.mkdir(parents=True, exist_ok=True)
+            with self.ctx.action_log.open("a", encoding="utf-8") as fh:
+                fh.write(f"{stamp}  {name}  {args}\n    -> {result}\n")
+        except OSError:
+            pass
+
+    def _call(self, name: str, arguments: str) -> str:
         tool = self.tools.get(name)
         if tool is None:
             return f"Error: there is no tool named {name!r}. Available: {', '.join(self.tools)}"

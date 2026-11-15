@@ -61,6 +61,27 @@ it. ARIZE shuts down on its own about a minute after you close the window.
 
 ![ARIZE desktop app](docs/screenshot.png)
 
+## Unrestricted mode
+
+Click **Unrestricted** at the top of the app (or **Settings › Unrestricted mode** on the
+phone, or put `unrestricted = true` in the settings file). Then ARIZE:
+
+- doesn't ask before writing or deleting files, running commands, or using your mouse
+  and keyboard,
+- can work in any folder on the computer, not just the workspace,
+- takes up to 100 steps per message, and is told to carry tasks through without
+  checking in or watering them down.
+
+What stays: the **Stop** button (the send button turns into it while she works), moving
+the mouse into a screen corner to stop screen control, and `~/.arize/actions.log`,
+which records every action she takes. She also treats text from web pages, files and
+command output as information, never as instructions, so a web page can't take over
+an unrestricted ARIZE. Small local models do make mistakes: keep backups.
+
+Some refusals come from the AI model's own training rather than from ARIZE. Different
+models behave differently: you can switch models in the settings file or, on the
+phone, in Settings.
+
 ## Phone edition (Android)
 
 A separate ARIZE that runs entirely on your Android phone, with no computer needed. A

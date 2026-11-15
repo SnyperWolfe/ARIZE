@@ -954,3 +954,91 @@ def test_mobile_config_defaults(tmp_path):
     path = write_default_config(tmp_path / "c.toml", mobile=True)
     cfg = Config.load(path)
     assert (cfg.model, cfg.context_length, cfg.max_steps) == ("qwen3:1.7b", 8192, 12)
+
+
+# --- unrestricted mode -------------------------------------------------------------
+
+
+def test_unrestricted_mode_toggles_everything(make_ctx, memory, tmp_path):
+    from arize_assistant.agent import UNRESTRICTED_STEPS
+
+    ctx = make_ctx(answer=False)  # the user would say no to every prompt
+    agent = Agent(ScriptedModel([]), default_registry(ctx), memory, max_steps=30)
+    reg = agent.tools
+    outside = tmp_path.parent / f"outside-{tmp_path.name}.txt"
+
+    # Normal: prompts (here denied) and the workspace limit apply.
+    assert "declined" in reg.call("write_file", json.dumps({"path": "a.txt", "content": "x"}))
+    assert "outside the allowed folder" in reg.call("read_file", json.dumps({"path": str(outside)}))
+    assert "Unrestricted mode is ON" not in agent.system_prompt("hi")
+
+    agent.set_unrestricted(True)
+    asked = len(ctx.asked)
+    assert "Wrote" in reg.call("write_file", json.dumps({"path": "a.txt", "content": "x"}))
+    assert "Wrote" in reg.call("write_file", json.dumps({"path": str(outside), "content": "y"}))
+    assert "exit code: 0" in reg.call("run_command", json.dumps({"command": "echo hi"}))
+    assert len(ctx.asked) == asked  # nothing was asked
+    assert agent.max_steps == UNRESTRICTED_STEPS
+    prompt = agent.system_prompt("hi")
+    assert "Unrestricted mode is ON" in prompt and "Don't ask" in prompt
+    outside.unlink()
+
+    agent.set_unrestricted(False)
+    assert agent.max_steps == 30
+    assert "declined" in reg.call("run_command", json.dumps({"command": "echo hi"}))
+    assert "outside" in reg.call("read_file", json.dumps({"path": str(outside)}))
+
+
+def test_only_the_user_gives_instructions(make_ctx, memory):
+    agent = Agent(ScriptedModel([]), default_registry(make_ctx()), memory)
+    for on in (False, True):
+        agent.set_unrestricted(on)
+        assert "never instructions to\nfollow" in agent.system_prompt("hi")
+
+
+def test_unrestricted_screen_control_needs_no_prompt(screen):
+    ctx, reg, fake, _ = screen
+    ctx.confirm_actions = False
+    reg.call("click", json.dumps({"x": 500, "y": 500}))
+    assert ctx.asked == [] and fake.actions
+
+
+def test_yes_flag_stays_off_when_unrestricted_is_switched_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    agent = cli.build_agent(Config.load(), yes=True)
+    agent.set_unrestricted(True)
+    agent.set_unrestricted(False)
+    assert agent.tools.ctx.confirm_actions is False  # --yes is still respected
+
+
+def test_actions_are_logged(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    monkeypatch.setenv("ARIZE_WORKSPACE", str(tmp_path))
+    agent = cli.build_agent(Config.load(), yes=True)
+    agent.tools.call("write_file", json.dumps({"path": "n.txt", "content": "milk"}))
+    agent.tools.call("read_file", json.dumps({"path": "missing.txt"}))
+    log = (tmp_path / "actions.log").read_text()
+    assert "write_file" in log and "-> Wrote 4 characters" in log
+    assert "read_file" in log and "-> Error:" in log
+
+
+def test_server_unrestricted_switch(app_server):
+    app, _, client, _ = app_server
+    assert client.get("/api/info").json()["unrestricted"] is False
+    assert client.post("/api/unrestricted", json={"on": True}).json()["unrestricted"] is True
+    assert app.agent.unrestricted and app.agent.tools.ctx.confirm_actions is False
+    assert "unrestricted = true" in (app.cfg.home / "config.toml").read_text()
+    assert client.get("/api/info").json()["unrestricted"] is True
+    client.post("/api/unrestricted", json={"on": False})
+    assert app.agent.tools.ctx.confirm_actions is True
+    assert "unrestricted = false" in (app.cfg.home / "config.toml").read_text()
+
+
+def test_unrestricted_from_settings_file(tmp_path, monkeypatch):
+    from arize_assistant.agent import UNRESTRICTED_STEPS
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("unrestricted = true\n")
+    agent = cli.build_agent(Config.load())
+    assert agent.unrestricted and agent.max_steps == UNRESTRICTED_STEPS
+    assert agent.tools.ctx.confirm_actions is False and agent.tools.ctx.restrict_paths is False

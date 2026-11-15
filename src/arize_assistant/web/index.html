@@ -151,6 +151,16 @@
   .icon-btn:hover { border-color: var(--cyan); color: var(--cyan); }
   .icon-btn.send { background: var(--cyan); color: #022; border-color: var(--cyan); }
   .icon-btn.send:disabled { opacity: 0.35; cursor: default; }
+  .icon-btn.send.stop { background: rgba(255, 90, 106, 0.14); color: #ff8a96; border-color: rgba(255, 138, 150, 0.6); }
+  .chip.danger[aria-pressed="true"] { border-color: #ff8a96; color: #ff8a96;
+    box-shadow: 0 0 10px rgba(255, 90, 106, 0.25) inset; }
+  .badge { position: absolute; top: 64px; left: 24px; font-family: var(--hud); font-size: 11px;
+    letter-spacing: 0.24em; color: #ff8a96; border: 1px solid rgba(255, 138, 150, 0.6);
+    border-radius: 999px; padding: 3px 10px; }
+  .dialog.danger { border-color: rgba(255, 138, 150, 0.5); }
+  .dialog.danger h2 { color: #ff8a96; }
+  .dialog ul { margin: 0 0 18px; padding-left: 20px; } .dialog li { margin-bottom: 6px; }
+  .btn.red { background: #ff5a6a; color: #1c0005; border-color: #ff5a6a; font-weight: 600; }
   .icon-btn.mic.on { border-color: var(--red); color: var(--red); box-shadow: 0 0 12px rgba(255, 90, 106, 0.4); }
   .icon-btn svg { width: 20px; height: 20px; }
   .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11px; text-align: center; }
@@ -202,6 +212,7 @@
 <div class="app">
   <section class="core-side" aria-label="ARIZE status">
     <div class="brand">ARIZE<small>PERSONAL ASSISTANT</small></div>
+    <div class="badge" id="badge" hidden>UNRESTRICTED</div>
     <div class="core" aria-hidden="true">
       <svg viewBox="0 0 400 400">
         <circle class="glow" cx="200" cy="200" r="70"/>
@@ -222,6 +233,7 @@
 
   <section class="chat-side">
     <div class="topbar">
+      <button class="chip danger" id="freeBtn" aria-pressed="false" title="Let ARIZE act without asking">Unrestricted off</button>
       <button class="chip" id="voiceBtn" aria-pressed="false" title="Read answers out loud">Voice off</button>
       <button class="chip" id="memBtn">Memories</button>
       <button class="chip" id="newBtn">New chat</button>
@@ -259,6 +271,23 @@
     <div class="actions">
       <button class="btn" id="denyBtn">Deny</button>
       <button class="btn primary" id="allowBtn">Allow</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="freeBox" role="dialog" aria-modal="true" aria-labelledby="freeTitle">
+  <div class="dialog danger">
+    <h2 id="freeTitle">Turn on unrestricted mode?</h2>
+    <ul>
+      <li>ARIZE won't ask before writing or deleting files, running commands, or using your mouse and keyboard.</li>
+      <li>She can work in any folder on this computer, and take up to 100 steps per message.</li>
+      <li>Small AI models make mistakes: keep backups of anything important.</li>
+      <li>To stop her at any time, click the red stop button, or move the mouse into a corner of the screen.</li>
+      <li>Everything she does is written to <code>.arize/actions.log</code> in your home folder.</li>
+    </ul>
+    <div class="actions">
+      <button class="btn" id="freeCancel">Cancel</button>
+      <button class="btn red" id="freeOn">Turn on</button>
     </div>
   </div>
 </div>
@@ -576,13 +605,45 @@ function autosize() {
   els.input.style.height = "auto";
   els.input.style.height = Math.min(els.input.scrollHeight, 180) + "px";
 }
-function updateSend() { els.send.disabled = busy || !els.input.value.trim(); }
+const SEND_SVG = els.send.innerHTML;
+const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+function updateSend() {
+  // While ARIZE works, the send button becomes a stop button.
+  els.send.classList.toggle("stop", busy);
+  els.send.innerHTML = busy ? STOP_SVG : SEND_SVG;
+  els.send.setAttribute("aria-label", busy ? "Stop" : "Send");
+  els.send.title = busy ? "Stop" : "Send";
+  els.send.disabled = !busy && !els.input.value.trim();
+}
+
+let unrestricted = false;
+function renderFree() {
+  $("freeBtn").setAttribute("aria-pressed", String(unrestricted));
+  $("freeBtn").textContent = unrestricted ? "Unrestricted on" : "Unrestricted off";
+  $("badge").hidden = !unrestricted;
+}
+async function setFree(on) {
+  const r = await (await api("/api/unrestricted", { method: "POST", body: JSON.stringify({ on }) })).json();
+  unrestricted = !!r.unrestricted;
+  renderFree();
+  hud(unrestricted ? "unrestricted mode ON" : "unrestricted mode off", unrestricted ? "err" : "ok");
+}
+$("freeBtn").onclick = () => {
+  if (unrestricted) { setFree(false); return; }
+  $("freeBox").classList.add("open");
+  $("freeCancel").focus();
+};
+$("freeCancel").onclick = () => $("freeBox").classList.remove("open");
+$("freeOn").onclick = () => { $("freeBox").classList.remove("open"); setFree(true); };
 
 els.input.addEventListener("input", () => { autosize(); updateSend(); });
 els.input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(els.input.value); }
 });
-els.send.onclick = () => send(els.input.value);
+els.send.onclick = () => {
+  if (busy) { api("/api/stop", { method: "POST" }); hud("stop requested", "err"); setState("idle", "Stopping"); }
+  else send(els.input.value);
+};
 els.mic.onclick = toggleMic;
 $("memBtn").onclick = showMemories;
 $("memClose").onclick = () => $("memBox").classList.remove("open");
@@ -606,6 +667,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   stopSpeaking();
   $("memBox").classList.remove("open");
+  $("freeBox").classList.remove("open");
 });
 
 // --- start-up -------------------------------------------------------------------
@@ -616,6 +678,8 @@ document.addEventListener("keydown", (e) => {
   try {
     const info = await (await api("/api/info")).json();
     $("model").textContent = "model " + info.model + (info.think ? " · thinking on" : "");
+    unrestricted = !!info.unrestricted;
+    renderFree();
     setState("idle", "Online");
     hud("ARIZE v" + info.version + " online");
     setTimeout(() => { if (!busy) setState("idle", "Standing by"); }, 1800);

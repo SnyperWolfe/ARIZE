@@ -38,7 +38,14 @@ def make_context(
         workspace=cfg.workspace_path,
         memory=memory,
         confirm=confirm,
-        confirm_actions=cfg.confirm_actions if confirm_actions is None else confirm_actions,
+        confirm_actions=(
+            (cfg.confirm_actions and not cfg.unrestricted)
+            if confirm_actions is None
+            else confirm_actions
+        ),
+        confirm_default=cfg.confirm_actions if confirm_actions is None else confirm_actions,
+        restrict_paths=not cfg.unrestricted,
+        action_log=cfg.home / "actions.log",
         vision=vision,
         godot_path=cfg.godot_path,
         control_minutes=cfg.control_minutes,

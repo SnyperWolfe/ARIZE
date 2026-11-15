@@ -62,6 +62,7 @@ class ArizeApp:
             cfg.max_steps,
             on_event=self._on_event,
             think=cfg.think,
+            unrestricted=cfg.unrestricted,
         )
         self.busy = threading.Lock()
         self.last_seen = time.monotonic()
@@ -92,6 +93,11 @@ class ArizeApp:
         return waiter[1]
 
     # --- called from request handlers ---------------------------------------
+
+    def set_unrestricted(self, on: bool) -> None:
+        self.cfg.unrestricted = on
+        self.agent.set_unrestricted(on)
+        save_setting("unrestricted", on, self.cfg.home / "config.toml")
 
     def stop(self) -> None:
         """The Stop button: stop at the next safe point and deny anything waiting."""
@@ -236,7 +242,13 @@ class Handler(BaseHTTPRequestHandler):
             cfg = self.app.cfg
             tools = sorted(self.app.agent.tools.tools)
             return self._json(
-                {"version": __version__, "model": cfg.model, "think": cfg.think, "tools": tools}
+                {
+                    "version": __version__,
+                    "model": cfg.model,
+                    "think": cfg.think,
+                    "tools": tools,
+                    "unrestricted": self.app.agent.unrestricted,
+                }
             )
         if path == "/api/models":
             return self._json(self.app.models())
@@ -259,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/confirm":
             ok = self.app.answer_confirm(str(body.get("id")), bool(body.get("allow")))
             return self._json({"ok": ok})
+        if path == "/api/unrestricted":
+            self.app.set_unrestricted(bool(body.get("on")))
+            return self._json({"ok": True, "unrestricted": self.app.agent.unrestricted})
         if path == "/api/stop":
             self.app.stop()
             return self._json({"ok": True})

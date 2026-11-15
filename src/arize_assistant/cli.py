@@ -72,7 +72,13 @@ def build_agent(cfg: Config, yes: bool = False) -> Agent:
         confirm_actions=cfg.confirm_actions and not yes,
     )
     return Agent(
-        model, default_registry(ctx), memory, cfg.max_steps, on_event=show_event, think=cfg.think
+        model,
+        default_registry(ctx),
+        memory,
+        cfg.max_steps,
+        on_event=show_event,
+        think=cfg.think,
+        unrestricted=cfg.unrestricted,
     )
 
 
@@ -86,6 +92,8 @@ def print_memories(memory: MemoryStore) -> None:
 
 def chat(agent: Agent, cfg: Config) -> int:
     print(f"{BOLD}{CYAN}ARIZE{RESET} {DIM}v{__version__} · {cfg.model} · /help for commands{RESET}")
+    if agent.unrestricted:
+        print(f"{YELLOW}Unrestricted mode is on: ARIZE won't ask before acting.{RESET}")
     while True:
         try:
             line = input(f"\n{BOLD}you ›{RESET} ").strip()
