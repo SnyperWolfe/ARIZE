@@ -93,11 +93,14 @@ def _stop_old(cfg: Config, port: int) -> bool:
     """Ask an older ARIZE still running in the background to quit (after an update)."""
     try:
         token = (cfg.home / "app.token").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    try:
         httpx.post(
             f"http://127.0.0.1:{port}/api/shutdown", headers={"X-Arize-Token": token}, timeout=3
         )
-    except (OSError, httpx.HTTPError):
-        return False
+    except httpx.HTTPError:
+        pass  # it may hang up as it shuts down; check below whether it went away
     for _ in range(50):
         if _running_version(port) is None:
             return True
