@@ -182,12 +182,6 @@
   .btn.primary { background: var(--amber); color: #2a1800; border: 0; }
   .btn.cyan { background: var(--cyan); color: #03222b; border: 0; }
 
-  .badge { font-family: var(--hud); font-size: 10px; letter-spacing: .2em; color: var(--red-text);
-    border: 1px solid rgba(255,138,150,.6); border-radius: 999px; padding: 2px 8px; }
-  .switch.danger[aria-checked="true"] { background: rgba(255,90,106,.25); border-color: var(--red-text); }
-  .switch.danger[aria-checked="true"]::after { background: var(--red-text); }
-  .card .note { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
 </head>
@@ -209,15 +203,12 @@
   <section class="view on" id="v-chat" aria-label="Chat">
     <header class="chathead">
       <svg class="core" aria-hidden="true"><use href="#core"></use></svg>
-      <div class="who"><div class="brand">ARIZE <span class="badge" data-free hidden>UNRESTRICTED</span></div><div class="status" id="status2" aria-live="polite">Standing by</div></div>
+      <div class="who"><div class="brand">ARIZE</div><div class="status" id="status2" aria-live="polite">Standing by</div></div>
       <button class="icon-btn" id="newBtn" aria-label="New chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
     </header>
     <div class="home" id="home">
       <div class="top">
-        <div style="display: flex; align-items: center; gap: 10px">
-          <div class="brand" style="color: var(--cyan); font-size: 18px">ARIZE</div>
-          <span class="badge" data-free hidden>UNRESTRICTED</span>
-        </div>
+        <div class="brand" style="color: var(--cyan); font-size: 18px">ARIZE</div>
         <span class="model-line" id="modelLine"></span>
       </div>
       <svg class="core" viewBox="0 0 400 400" aria-hidden="true"><use href="#core"></use></svg>
@@ -255,12 +246,6 @@
         <h2>Voice</h2>
         <div class="row"><span id="voiceLbl">Read answers out loud</span>
           <button class="switch" id="voiceSw" role="switch" aria-checked="false" aria-labelledby="voiceLbl"></button></div>
-      </div>
-      <div class="card">
-        <h2>Unrestricted mode</h2>
-        <div class="row"><span id="freeLbl">Act without asking</span>
-          <button class="switch danger" id="freeSw" role="switch" aria-checked="false" aria-labelledby="freeLbl"></button></div>
-        <p class="note">No permission prompts, any folder on the phone, and up to 100 steps per message. Tap Stop to halt her any time.</p>
       </div>
       <div class="card">
         <h2>AI model</h2>
@@ -575,17 +560,6 @@ document.querySelectorAll("[data-pull]").forEach((b) => b.onclick = async () => 
   finally { document.querySelectorAll("[data-pull]").forEach((x) => (x.disabled = false)); }
 });
 
-let unrestricted = false;
-function renderFree() {
-  $("freeSw").setAttribute("aria-checked", String(unrestricted));
-  document.querySelectorAll("[data-free]").forEach((b) => (b.hidden = !unrestricted));
-}
-$("freeSw").onclick = async () => {
-  const on = !unrestricted;
-  if (on && !confirm("Turn on unrestricted mode?\n\nARIZE won't ask before writing or deleting files or running commands, and can use any folder on this phone. Small AI models make mistakes, so keep backups. Tap Stop to halt her any time.")) return;
-  const r = await (await api("/api/unrestricted", { method: "POST", body: JSON.stringify({ on }) })).json();
-  unrestricted = !!r.unrestricted; renderFree();
-};
 $("voiceSw").onclick = () => {
   voiceOn = !voiceOn; $("voiceSw").setAttribute("aria-checked", String(voiceOn));
   try { localStorage.setItem("arize-voice", voiceOn ? "1" : "0"); } catch {}
@@ -608,7 +582,6 @@ document.querySelectorAll("[data-q]").forEach((b) => b.onclick = () => send(b.da
     const info = await (await api("/api/info")).json();
     tools = info.tools || [];
     $("modelLine").textContent = info.model;
-    unrestricted = !!info.unrestricted; renderFree();
     $("about").textContent = "ARIZE v" + info.version + " · running on this phone";
     document.querySelectorAll("[data-needs]").forEach((b) => { if (!tools.includes(b.dataset.needs)) b.remove(); });
     setState("idle", "Standing by");

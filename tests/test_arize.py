@@ -1042,3 +1042,21 @@ def test_unrestricted_from_settings_file(tmp_path, monkeypatch):
     agent = cli.build_agent(Config.load())
     assert agent.unrestricted and agent.max_steps == UNRESTRICTED_STEPS
     assert agent.tools.ctx.confirm_actions is False and agent.tools.ctx.restrict_paths is False
+
+
+def test_phone_edition_has_no_unrestricted_mode(mobile_server):
+    app, client, _, home = mobile_server
+    assert "freeSw" not in client.get("/").text and "UNRESTRICTED" not in client.get("/").text
+    assert client.post("/api/unrestricted", json={"on": True}).status_code == 403
+    assert client.get("/api/info").json()["unrestricted"] is False
+    assert app.agent.tools.ctx.confirm_actions is True
+
+
+def test_phone_ignores_unrestricted_in_settings_file(tmp_path, monkeypatch, fake_termux):
+    from arize_assistant.server import ArizeApp
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("unrestricted = true\n")
+    app = ArizeApp(Config.load(), model=ScriptedModel([]), mobile=True)
+    assert not app.agent.unrestricted and app.agent.tools.ctx.restrict_paths
+    assert app.agent.tools.ctx.confirm_actions is True

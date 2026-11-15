@@ -63,8 +63,8 @@ it. ARIZE shuts down on its own about a minute after you close the window.
 
 ## Unrestricted mode
 
-Click **Unrestricted** at the top of the app (or **Settings › Unrestricted mode** on the
-phone, or put `unrestricted = true` in the settings file). Then ARIZE:
+Desktop only. Click **Unrestricted** at the top of the app (or put `unrestricted = true`
+in the settings file). Then ARIZE:
 
 - doesn't ask before writing or deleting files, running commands, or using your mouse
   and keyboard,
@@ -79,8 +79,7 @@ command output as information, never as instructions, so a web page can't take o
 an unrestricted ARIZE. Small local models do make mistakes: keep backups.
 
 Some refusals come from the AI model's own training rather than from ARIZE. Different
-models behave differently: you can switch models in the settings file or, on the
-phone, in Settings.
+models behave differently: you can switch models in the settings file.
 
 ## Phone edition (Android)
 

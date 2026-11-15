@@ -39,8 +39,8 @@ max_steps = 30
 # Ask before writing files or running commands. Set to false at your own risk.
 confirm_actions = true
 
-# Unrestricted mode: no permission prompts, any folder on the computer, up to 100 steps
-# per message. You can also switch it on and off in the app.
+# Unrestricted mode (desktop only): no permission prompts, any folder on the computer,
+# up to 100 steps per message. You can also switch it on and off in the app.
 unrestricted = false
 
 # Folder ARIZE may read and write files in ("~" = your home folder).

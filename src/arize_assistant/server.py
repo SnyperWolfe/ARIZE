@@ -62,7 +62,8 @@ class ArizeApp:
             cfg.max_steps,
             on_event=self._on_event,
             think=cfg.think,
-            unrestricted=cfg.unrestricted,
+            # Unrestricted mode is a desktop feature; the phone edition never uses it.
+            unrestricted=cfg.unrestricted and not mobile,
         )
         self.busy = threading.Lock()
         self.last_seen = time.monotonic()
@@ -272,6 +273,8 @@ class Handler(BaseHTTPRequestHandler):
             ok = self.app.answer_confirm(str(body.get("id")), bool(body.get("allow")))
             return self._json({"ok": ok})
         if path == "/api/unrestricted":
+            if self.app.mobile:
+                return self._json({"error": "Unrestricted mode is only on the desktop"}, 403)
             self.app.set_unrestricted(bool(body.get("on")))
             return self._json({"ok": True, "unrestricted": self.app.agent.unrestricted})
         if path == "/api/stop":
