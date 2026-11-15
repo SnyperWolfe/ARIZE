@@ -1060,3 +1060,97 @@ def test_phone_ignores_unrestricted_in_settings_file(tmp_path, monkeypatch, fake
     app = ArizeApp(Config.load(), model=ScriptedModel([]), mobile=True)
     assert not app.agent.unrestricted and app.agent.tools.ctx.restrict_paths
     assert app.agent.tools.ctx.confirm_actions is True
+
+
+# --- updates -------------------------------------------------------------------------
+
+
+def test_version_check(monkeypatch):
+    from arize_assistant import updater
+
+    assert updater.parse_version("0.10.0") > updater.parse_version("0.9.9")
+    monkeypatch.setattr(updater, "__version__", "0.5.0")
+    monkeypatch.setattr(updater, "latest_version", lambda repo: "0.6.0")
+    assert updater.check() == {"current": "0.5.0", "latest": "0.6.0", "newer": True}
+    monkeypatch.setattr(updater, "latest_version", lambda repo: "0.5.0")
+    assert updater.check()["newer"] is False
+
+    def offline(repo):
+        raise httpx.ConnectError("no internet")
+
+    monkeypatch.setattr(updater, "latest_version", offline)
+    assert "no internet" in updater.check()["error"]
+
+
+def test_latest_version_reads_github(monkeypatch):
+    from arize_assistant import updater
+
+    def fake_get(url, **kw):
+        assert url.startswith("https://raw.githubusercontent.com/SnyperWolfe/ARIZE/main/")
+        return httpx.Response(
+            200, text='"""x"""\n\n__version__ = "1.2.3"\n', request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(updater.httpx, "get", fake_get)
+    assert updater.latest_version() == "1.2.3"
+
+
+def test_install_reports_pip_output(tmp_path, monkeypatch):
+    import sys
+
+    from arize_assistant import updater
+
+    fake = tmp_path / "fakepython"
+    fake.write_text(f"#!{sys.executable}\nprint('Collecting arize')\nprint('Installed')\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(updater, "_console_python", lambda: str(fake))
+    assert list(updater.install()) == ["Collecting arize", "Installed", "OK"]
+    fake.write_text(f"#!{sys.executable}\nimport sys\nprint('ERROR: no network')\nsys.exit(1)\n")
+    assert list(updater.install())[-1] == "FAILED (exit code 1)"
+
+
+def test_server_update_installs_then_restarts(app_server, monkeypatch):
+    from arize_assistant import updater
+
+    app, _, client, _ = app_server
+    restarted = []
+    monkeypatch.setattr(updater, "install", lambda repo: iter(["Collecting arize", "OK"]))
+    monkeypatch.setattr(updater, "restart_app", restarted.append)
+    events = [json.loads(x) for x in client.post("/api/update").text.splitlines()]
+    assert [e["line"] for e in events] == ["Collecting arize", "OK", "Restarting ARIZE…"]
+    assert restarted and isinstance(restarted[0], int)
+
+    restarted.clear()
+    monkeypatch.setattr(updater, "install", lambda repo: iter(["ERROR", "FAILED (exit code 1)"]))
+    events = [json.loads(x) for x in client.post("/api/update").text.splitlines()]
+    assert events[-1]["line"] == "FAILED (exit code 1)" and restarted == []
+
+    with app.busy:  # not while ARIZE is answering
+        assert client.post("/api/update").status_code == 409
+
+    monkeypatch.setattr(
+        updater, "check", lambda repo: {"current": "0.5.0", "latest": "0.6.0", "newer": True}
+    )
+    assert client.get("/api/update/check").json()["newer"] is True
+
+
+def test_phone_edition_cant_self_update(mobile_server):
+    _, client, _, _ = mobile_server
+    assert client.post("/api/update").status_code == 403
+
+
+def test_cli_update(monkeypatch, capsys, tmp_path):
+    from arize_assistant import updater
+
+    monkeypatch.setenv("ARIZE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        updater, "check", lambda repo: {"current": "0.5.0", "latest": "0.5.0", "newer": False}
+    )
+    assert cli.main(["update"]) == 0 and "up to date" in capsys.readouterr().out
+    monkeypatch.setattr(
+        updater, "check", lambda repo: {"current": "0.5.0", "latest": "0.6.0", "newer": True}
+    )
+    monkeypatch.setattr(updater, "install", lambda repo: iter(["Installed", "OK"]))
+    assert cli.main(["update"]) == 0 and "Updated to ARIZE 0.6.0" in capsys.readouterr().out
+    monkeypatch.setattr(updater, "install", lambda repo: iter(["FAILED (exit code 1)"]))
+    assert cli.main(["update"]) == 1

@@ -160,6 +160,10 @@
   .dialog.danger { border-color: rgba(255, 138, 150, 0.5); }
   .dialog.danger h2 { color: #ff8a96; }
   .dialog ul { margin: 0 0 18px; padding-left: 20px; } .dialog li { margin-bottom: 6px; }
+  .chip.new { border-color: var(--cyan); color: #022; background: var(--cyan);
+    box-shadow: 0 0 14px rgba(70, 220, 255, 0.45); }
+  .uplog { max-height: 180px; overflow: auto; }
+  .btn.cyan { background: var(--cyan); color: #022; border-color: var(--cyan); font-weight: 600; }
   .btn.red { background: #ff5a6a; color: #1c0005; border-color: #ff5a6a; font-weight: 600; }
   .icon-btn.mic.on { border-color: var(--red); color: var(--red); box-shadow: 0 0 12px rgba(255, 90, 106, 0.4); }
   .icon-btn svg { width: 20px; height: 20px; }
@@ -235,6 +239,7 @@
     <div class="topbar">
       <button class="chip danger" id="freeBtn" aria-pressed="false" title="Let ARIZE act without asking">Unrestricted off</button>
       <button class="chip" id="voiceBtn" aria-pressed="false" title="Read answers out loud">Voice off</button>
+      <button class="chip" id="updBtn" title="Check for a newer ARIZE">Update</button>
       <button class="chip" id="memBtn">Memories</button>
       <button class="chip" id="newBtn">New chat</button>
     </div>
@@ -288,6 +293,18 @@
     <div class="actions">
       <button class="btn" id="freeCancel">Cancel</button>
       <button class="btn red" id="freeOn">Turn on</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="updBox" role="dialog" aria-modal="true" aria-labelledby="updTitle">
+  <div class="dialog">
+    <h2 id="updTitle">Update ARIZE</h2>
+    <p id="updText" style="margin: 0 0 16px"></p>
+    <pre class="uplog" id="updLog" hidden></pre>
+    <div class="actions">
+      <button class="btn" id="updClose">Close</button>
+      <button class="btn cyan" id="updGo" hidden>Update now</button>
     </div>
   </div>
 </div>
@@ -633,6 +650,76 @@ $("freeBtn").onclick = () => {
   $("freeBox").classList.add("open");
   $("freeCancel").focus();
 };
+// --- updates ---------------------------------------------------------------------
+let updInfo = null;
+async function checkUpdate() {
+  try { updInfo = await (await api("/api/update/check")).json(); } catch { updInfo = { error: "no connection" }; }
+  const b = $("updBtn");
+  b.classList.toggle("new", !!updInfo.newer);
+  b.textContent = updInfo.newer ? "Update to v" + updInfo.latest : "Update";
+  return updInfo;
+}
+async function openUpdate() {
+  $("updLog").hidden = true; $("updLog").textContent = ""; $("updGo").hidden = true;
+  $("updClose").disabled = false; $("updClose").textContent = "Close";
+  $("updText").textContent = "Checking GitHub for a newer version…";
+  $("updBox").classList.add("open");
+  const info = await checkUpdate();
+  if (info.error) {
+    $("updText").textContent = "Couldn't check for updates (" + info.error + "). Is the internet connected?";
+  } else if (!info.newer) {
+    $("updText").textContent = "ARIZE v" + info.current + " is up to date.";
+  } else {
+    $("updText").textContent = "ARIZE v" + info.latest + " is available (you have v" + info.current +
+      "). She'll download it, install it and restart. It takes about a minute.";
+    $("updGo").hidden = false; $("updClose").textContent = "Not now";
+    $("updGo").focus();
+  }
+}
+async function runUpdate() {
+  if (busy) { $("updText").textContent = "Wait until ARIZE finishes answering, then try again."; return; }
+  const target = updInfo.latest;
+  $("updGo").hidden = true; $("updClose").disabled = true;
+  $("updText").textContent = "Downloading and installing v" + target + "…";
+  const logEl = $("updLog"); logEl.hidden = false;
+  let ok = false;
+  try {
+    const res = await api("/api/update", { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "error " + res.status);
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true }); let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const ev = JSON.parse(buf.slice(0, nl)); buf = buf.slice(nl + 1);
+        if (ev.line === "OK") ok = true;
+        logEl.textContent += ev.line + "\n"; logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+  } catch (err) {
+    logEl.textContent += String(err.message || err) + "\n";
+  }
+  if (!ok) {
+    $("updText").textContent = "The update didn't work. The messages below say why.";
+    $("updClose").disabled = false; return;
+  }
+  $("updText").textContent = "Installed. Restarting ARIZE…";
+  setState("thinking", "Restarting");
+  // The new ARIZE takes over this port; reload once it answers with the new version.
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const h = await (await fetch("/api/health", { cache: "no-store" })).json();
+      if (h.version === target) { location.reload(); return; }
+    } catch {}
+  }
+  $("updText").textContent = "ARIZE didn't come back by itself. Close this window and open ARIZE from its icon.";
+  $("updClose").disabled = false;
+}
+$("updBtn").onclick = openUpdate;
+$("updGo").onclick = runUpdate;
+$("updClose").onclick = () => $("updBox").classList.remove("open");
+
 $("freeCancel").onclick = () => $("freeBox").classList.remove("open");
 $("freeOn").onclick = () => { $("freeBox").classList.remove("open"); setFree(true); };
 
@@ -668,6 +755,7 @@ document.addEventListener("keydown", (e) => {
   stopSpeaking();
   $("memBox").classList.remove("open");
   $("freeBox").classList.remove("open");
+  if (!$("updClose").disabled) $("updBox").classList.remove("open");
 });
 
 // --- start-up -------------------------------------------------------------------
@@ -680,6 +768,7 @@ document.addEventListener("keydown", (e) => {
     $("model").textContent = "model " + info.model + (info.think ? " · thinking on" : "");
     unrestricted = !!info.unrestricted;
     renderFree();
+    checkUpdate();
     setState("idle", "Online");
     hud("ARIZE v" + info.version + " online");
     setTimeout(() => { if (!busy) setState("idle", "Standing by"); }, 1800);

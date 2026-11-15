@@ -75,6 +75,7 @@ class Config:
     max_steps: int = 30
     confirm_actions: bool = True
     unrestricted: bool = False
+    update_repo: str = "SnyperWolfe/ARIZE"  # the GitHub repo updates come from
     workspace: str = "~"
     think: bool = False
     vision_model: str = ""

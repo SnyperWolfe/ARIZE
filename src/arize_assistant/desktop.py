@@ -105,7 +105,11 @@ def _stop_old(cfg: Config, port: int) -> bool:
     return False
 
 
-def run_app(cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True) -> int:
+def run_app(
+    cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True, replace: bool = False
+) -> int:
+    """Run the app. ``replace``: after an update, take over from the running ARIZE on
+    ``port`` and let its open window reload, instead of opening a new one."""
     from .server import ArizeApp, make_server, stop_when_idle
 
     write_default_config()
@@ -116,7 +120,7 @@ def run_app(cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     running = _running_version(port)
-    if running == __version__:
+    if running == __version__ and not replace:
         log.info("ARIZE already running on port %s; opening another window", port)
         if open_ui:
             open_window(f"http://127.0.0.1:{port}/", cfg)
@@ -136,9 +140,10 @@ def run_app(cfg: Config, port: int = DEFAULT_PORT, open_ui: bool = True) -> int:
     except OSError:
         pass
     log.info("ARIZE app listening on %s (model %s)", url, cfg.model)
-    if open_ui:
-        app.last_seen = time.monotonic() + 60  # give the window time to open
+    if open_ui or replace:
+        app.last_seen = time.monotonic() + 60  # give the window time to (re)open
         stop_when_idle(server, app)
+    if open_ui and not replace:
         open_window(url, cfg)
     else:
         print(f"ARIZE is running at {url}  (Ctrl+C to stop)")

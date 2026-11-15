@@ -61,6 +61,12 @@ it. ARIZE shuts down on its own about a minute after you close the window.
 
 ![ARIZE desktop app](docs/screenshot.png)
 
+## Updating
+
+Click **Update** at the top of the ARIZE window. If GitHub has a newer version, she
+downloads it, installs it and restarts by herself. From a terminal: `arize update`.
+On the phone, run the install command in Termux again.
+
 ## Unrestricted mode
 
 Desktop only. Click **Unrestricted** at the top of the app (or put `unrestricted = true`
@@ -156,6 +162,7 @@ Run"* or *"In the game, walk forward for 3 seconds then press E"*.
 | `arize tools` | List the tools ARIZE can use. |
 | `arize app` | Open the desktop app window. |
 | `arize shortcut` | Create the desktop icon. |
+| `arize update` | Update ARIZE to the newest version from GitHub. |
 | `arize --model llama3.1` | Use a different model for this run. |
 | `arize init` | Create the settings file. |
 

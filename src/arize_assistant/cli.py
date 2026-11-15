@@ -152,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     p_app = sub.add_parser("app", help="open ARIZE in its own window")
     p_app.add_argument("--port", type=int, default=8765)
     p_app.add_argument("--no-window", action="store_true", help="only start the server")
+    p_app.add_argument("--replace", action="store_true", help=argparse.SUPPRESS)
+    sub.add_parser("update", help="update ARIZE to the newest version from GitHub")
     sub.add_parser("shortcut", help="put an ARIZE icon on the desktop and in the Start menu")
     p_mob = sub.add_parser("mobile", help="run the phone edition (Android, in Termux)")
     p_mob.add_argument("--port", type=int, default=8765)
@@ -175,7 +177,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "app":
         from .desktop import run_app
 
-        return run_app(cfg, port=args.port, open_ui=not args.no_window)
+        return run_app(cfg, port=args.port, open_ui=not args.no_window, replace=args.replace)
+
+    if args.command == "update":
+        from . import updater
+
+        info = updater.check(cfg.update_repo)
+        if info.get("error"):
+            print(f"Couldn't check for updates: {info['error']}", file=sys.stderr)
+            return 1
+        if not info["newer"]:
+            print(f"ARIZE {info['current']} is up to date.")
+            return 0
+        print(f"Updating ARIZE {info['current']} -> {info['latest']}…")
+        last = ""
+        for line in updater.install(cfg.update_repo):
+            print(f"{DIM}{line}{RESET}")
+            last = line
+        if last != "OK":
+            print("The update failed: see the messages above.", file=sys.stderr)
+            return 1
+        print(f"Updated to ARIZE {info['latest']}. Close and reopen ARIZE to use it.")
+        return 0
 
     if args.command == "shortcut":
         from .desktop import create_shortcuts

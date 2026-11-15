@@ -251,6 +251,10 @@ class Handler(BaseHTTPRequestHandler):
                     "unrestricted": self.app.agent.unrestricted,
                 }
             )
+        if path == "/api/update/check":
+            from . import updater
+
+            return self._json(updater.check(self.app.cfg.update_repo))
         if path == "/api/models":
             return self._json(self.app.models())
         if path == "/api/memories":
@@ -272,6 +276,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/confirm":
             ok = self.app.answer_confirm(str(body.get("id")), bool(body.get("allow")))
             return self._json({"ok": ok})
+        if path == "/api/update":
+            if self.app.mobile:
+                return self._json({"error": "On the phone, run the install command in Termux"}, 403)
+            return self._update()
         if path == "/api/unrestricted":
             if self.app.mobile:
                 return self._json({"error": "Unrestricted mode is only on the desktop"}, 403)
@@ -316,6 +324,29 @@ class Handler(BaseHTTPRequestHandler):
         except httpx.HTTPError as exc:
             self.wfile.write((json.dumps({"error": str(exc)}) + "\n").encode())
         self.close_connection = True
+
+    def _update(self) -> None:
+        """Install the newest ARIZE, then start it: it takes over from this server."""
+        from . import updater
+
+        if not self.app.busy.acquire(blocking=False):
+            return self._json({"error": "Wait until ARIZE finishes answering"}, 409)
+        ok = False
+        try:
+
+            def events():
+                nonlocal ok
+                for line in updater.install(self.app.cfg.update_repo):
+                    ok = line == "OK"
+                    yield {"line": line}
+                if ok:
+                    yield {"line": "Restarting ARIZE…", "restarting": True}
+
+            self._stream(events())
+        finally:
+            self.app.busy.release()
+        if ok:
+            updater.restart_app(self.server.server_address[1])
 
     def _chat(self, message: str) -> None:
         if not message:
