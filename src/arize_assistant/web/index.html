@@ -341,12 +341,16 @@ const TOOL_LABELS = {
   focus_window: "Switching window",
 };
 
-function api(path, opts = {}) {
-  return fetch(path, {
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
     ...opts,
     headers: { "Content-Type": "application/json", "X-Arize-Token": TOKEN, ...(opts.headers || {}) },
   });
+  // ARIZE restarted (e.g. after an update) and this page's key is old: load a fresh page.
+  if (res.status === 403 && !reloading) { reloading = true; location.reload(); }
+  return res;
 }
+let reloading = false;
 
 function setState(state, text) {
   document.body.className = "state-" + state;
@@ -678,9 +682,9 @@ async function openUpdate() {
 }
 async function runUpdate() {
   if (busy) { $("updText").textContent = "Wait until ARIZE finishes answering, then try again."; return; }
-  const target = updInfo.latest;
+  const from = updInfo.current;
   $("updGo").hidden = true; $("updClose").disabled = true;
-  $("updText").textContent = "Downloading and installing v" + target + "…";
+  $("updText").textContent = "Downloading and installing v" + updInfo.latest + "…";
   const logEl = $("updLog"); logEl.hidden = false;
   let ok = false;
   try {
@@ -710,7 +714,8 @@ async function runUpdate() {
     await new Promise((r) => setTimeout(r, 1000));
     try {
       const h = await (await fetch("/api/health", { cache: "no-store" })).json();
-      if (h.version === target) { location.reload(); return; }
+      // Any new version will do: GitHub's version check can lag a few minutes behind.
+      if (h.version && h.version !== from) { reloading = true; location.reload(); return; }
     } catch {}
   }
   $("updText").textContent = "ARIZE didn't come back by itself. Close this window and open ARIZE from its icon.";
